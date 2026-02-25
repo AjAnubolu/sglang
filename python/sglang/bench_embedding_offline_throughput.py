@@ -134,9 +134,9 @@ def throughput_test_once(
     prompt = [r.prompt for r in reqs]
 
     if profile:
-        assert "SGLANG_TORCH_PROFILER_DIR" in os.environ, (
-            "Please set SGLANG_TORCH_PROFILER_DIR."
-        )
+        assert (
+            "SGLANG_TORCH_PROFILER_DIR" in os.environ
+        ), "Please set SGLANG_TORCH_PROFILER_DIR."
         os.makedirs(os.environ["SGLANG_TORCH_PROFILER_DIR"], exist_ok=True)
         backend.start_profile()
 
