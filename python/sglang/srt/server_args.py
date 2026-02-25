@@ -702,6 +702,17 @@ class ServerArgs:
     # For forward hooks
     forward_hooks: Optional[List[dict[str, Any]]] = None
 
+    _REDACTED_FIELDS = ("api_key", "admin_api_key")
+
+    def __repr__(self):
+        fields = []
+        for f in dataclasses.fields(self):
+            value = getattr(self, f.name)
+            if f.name in self._REDACTED_FIELDS and value is not None:
+                value = "[REDACTED]"
+            fields.append(f"{f.name}={value!r}")
+        return f"{type(self).__name__}({', '.join(fields)})"
+
     def __post_init__(self):
         """
         Orchestrates the handling of various server arguments, ensuring proper configuration and validation.

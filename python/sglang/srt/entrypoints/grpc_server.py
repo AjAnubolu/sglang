@@ -445,6 +445,8 @@ class SGLangSchedulerServicer(sglang_scheduler_pb2_grpc.SglangSchedulerServicer)
         logger.debug("Receive server info request")
 
         server_args_dict = dataclasses.asdict(self.server_args)
+        server_args_dict.pop("api_key", None)
+        server_args_dict.pop("admin_api_key", None)
         server_args_struct = Struct()
 
         def make_serializable(obj):

@@ -621,8 +621,12 @@ async def server_info():
     if hasattr(_global_state.tokenizer_manager.server_args, "model_config"):
         del _global_state.tokenizer_manager.server_args.model_config
 
+    server_args_dict = dataclasses.asdict(_global_state.tokenizer_manager.server_args)
+    server_args_dict.pop("api_key", None)
+    server_args_dict.pop("admin_api_key", None)
+
     return {
-        **dataclasses.asdict(_global_state.tokenizer_manager.server_args),
+        **server_args_dict,
         **_global_state.scheduler_info,
         "internal_states": internal_states,
         "version": __version__,

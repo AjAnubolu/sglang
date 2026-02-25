@@ -543,8 +543,12 @@ class Engine(EngineBase):
         internal_states = self.loop.run_until_complete(
             self.tokenizer_manager.get_internal_state()
         )
+        server_args_dict = dataclasses.asdict(self.tokenizer_manager.server_args)
+        server_args_dict.pop("api_key", None)
+        server_args_dict.pop("admin_api_key", None)
+
         return {
-            **dataclasses.asdict(self.tokenizer_manager.server_args),
+            **server_args_dict,
             **self.scheduler_info,
             "internal_states": internal_states,
             "version": __version__,
