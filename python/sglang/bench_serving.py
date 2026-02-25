@@ -788,6 +788,45 @@ async def _call_profile_pd(profile_urls: List[Tuple[str, str]], mode: str) -> No
             )
 
 
+async def async_request_embedding(
+    request_func_input: RequestFuncInput,
+    pbar: Optional[tqdm] = None,
+) -> RequestFuncOutput:
+    api_url = request_func_input.api_url
+    headers = get_request_headers()
+    payload = {
+        "model": request_func_input.model,
+        "input": request_func_input.prompt,
+    }
+
+    output = RequestFuncOutput.init_new(request_func_input)
+
+    async with _create_bench_client_session() as session:
+        st = time.perf_counter()
+        output.start_time = st
+        try:
+            async with session.post(
+                url=api_url, json=payload, headers=headers
+            ) as response:
+                if response.status == 200:
+                    await response.json()
+                    output.latency = time.perf_counter() - st
+                    output.success = True
+                else:
+                    output.error = (
+                        (response.reason or "") + ": " + (await response.text())
+                    )
+                    output.success = False
+        except Exception:
+            output.success = False
+            exc_info = sys.exc_info()
+            output.error = "".join(traceback.format_exception(*exc_info))
+
+    if pbar:
+        pbar.update(1)
+    return output
+
+
 ASYNC_REQUEST_FUNCS = {
     "sglang": async_request_sglang_generate,
     "sglang-native": async_request_sglang_generate,
@@ -889,6 +928,7 @@ def calculate_metrics(
     backend: str,
     accept_length: Optional[float] = None,
     plot_throughput: bool = False,
+    is_embedding: bool = False,
 ) -> Tuple[BenchmarkMetrics, List[int]]:
     output_lens: List[int] = []
     retokenized_output_lens: List[int] = []
@@ -903,37 +943,48 @@ def calculate_metrics(
     retokenized_itls: List[float] = []
 
     use_retokenized_itl = (
-        accept_length is not None
+        not is_embedding
+        and accept_length is not None
         and accept_length > 0
         and backend in ("sglang-oai", "sglang-oai-chat")
     )
 
     for i in range(len(outputs)):
         if outputs[i].success:
-            output_len = outputs[i].output_len
-            output_lens.append(output_len)
-            retokenized_output_len = len(
-                tokenizer.encode(outputs[i].generated_text, add_special_tokens=False)
-            )
-            retokenized_output_lens.append(retokenized_output_len)
+            if is_embedding:
+                output_lens.append(0)
+                retokenized_output_lens.append(0)
+            else:
+                output_len = outputs[i].output_len
+                output_lens.append(output_len)
+                retokenized_output_len = len(
+                    tokenizer.encode(
+                        outputs[i].generated_text, add_special_tokens=False
+                    )
+                )
+                retokenized_output_lens.append(retokenized_output_len)
             if input_requests is not None:
                 total_input += input_requests[i].prompt_len
                 total_input_text += input_requests[i].text_prompt_len
                 total_input_vision += input_requests[i].vision_prompt_len
-            if output_len > 1:
-                tpots.append((outputs[i].latency - outputs[i].ttft) / (output_len - 1))
-            if use_retokenized_itl:
-                for k, itl in enumerate(outputs[i].itl):
-                    num_tokens = len(
-                        tokenizer.encode(
-                            outputs[i].text_chunks[k], add_special_tokens=False
-                        )
+            if not is_embedding:
+                output_len = outputs[i].output_len
+                if output_len > 1:
+                    tpots.append(
+                        (outputs[i].latency - outputs[i].ttft) / (output_len - 1)
                     )
-                    adjusted_itl = itl / num_tokens
-                    retokenized_itls.extend([adjusted_itl] * num_tokens)
-            else:
-                itls += outputs[i].itl
-            ttfts.append(outputs[i].ttft)
+                if use_retokenized_itl:
+                    for k, itl in enumerate(outputs[i].itl):
+                        num_tokens = len(
+                            tokenizer.encode(
+                                outputs[i].text_chunks[k], add_special_tokens=False
+                            )
+                        )
+                        adjusted_itl = itl / num_tokens
+                        retokenized_itls.extend([adjusted_itl] * num_tokens)
+                else:
+                    itls += outputs[i].itl
+                ttfts.append(outputs[i].ttft)
 
             e2e_latencies.append(outputs[i].latency)
 
@@ -953,7 +1004,7 @@ def calculate_metrics(
     max_concurrent_requests = 0
 
     successful_outputs = [output for output in outputs if output.success]
-    if successful_outputs:
+    if successful_outputs and not is_embedding:
         min_start_time = min(output.start_time for output in successful_outputs)
         max_end_time = max(
             output.start_time + output.latency for output in successful_outputs
@@ -1116,7 +1167,11 @@ async def benchmark(
     profile_prefill_url: Optional[List[str]] = None,
     profile_decode_url: Optional[List[str]] = None,
 ):
-    if backend in ASYNC_REQUEST_FUNCS:
+    is_embedding = getattr(args, "embedding", False)
+
+    if is_embedding:
+        request_func = async_request_embedding
+    elif backend in ASYNC_REQUEST_FUNCS:
         request_func = ASYNC_REQUEST_FUNCS[backend]
     else:
         raise ValueError(f"Unknown backend: {backend}")
@@ -1184,7 +1239,7 @@ async def benchmark(
         prompt=test_request.prompt,
         api_url=api_url,
         prompt_len=test_request.prompt_len,
-        output_len=min(test_request.output_len, 32),
+        output_len=0 if is_embedding else min(test_request.output_len, 32),
         lora_name=lora_name,
         image_data=test_request.image_data,
         extra_request_body=extra_request_body,
@@ -1295,7 +1350,7 @@ async def benchmark(
             prompt=request.prompt,
             api_url=api_url,
             prompt_len=request.prompt_len,
-            output_len=request.output_len,
+            output_len=0 if is_embedding else request.output_len,
             lora_name=lora_name,
             image_data=request.image_data,
             extra_request_body=merged_extra_body,
@@ -1361,107 +1416,171 @@ async def benchmark(
         backend=backend,
         accept_length=accept_length,
         plot_throughput=args.plot_throughput,
+        is_embedding=is_embedding,
     )
 
-    print("\n{s:{c}^{n}}".format(s=" Serving Benchmark Result ", n=50, c="="))
-    print("{:<40} {:<10}".format("Backend:", backend))
-    print(
-        "{:<40} {:<10}".format(
-            "Traffic request rate:", "trace" if use_trace_timestamps else request_rate
-        )
-    )
-    print(
-        "{:<40} {:<10}".format(
-            "Max request concurrency:",
-            max_concurrency if max_concurrency else "not set",
-        )
-    )
-    print("{:<40} {:<10}".format("Successful requests:", metrics.completed))
-    print("{:<40} {:<10.2f}".format("Benchmark duration (s):", benchmark_duration))
-    print("{:<40} {:<10}".format("Total input tokens:", metrics.total_input))
-    print("{:<40} {:<10}".format("Total input text tokens:", metrics.total_input_text))
-    if args.dataset_name in ["image", "mmmu"]:
+    if is_embedding:
         print(
-            "{:<40} {:<10}".format(
-                "Total input vision tokens:", metrics.total_input_vision
+            "\n{s:{c}^{n}}".format(
+                s=" Embedding Serving Benchmark Result ", n=60, c="="
             )
         )
-    print("{:<40} {:<10}".format("Total generated tokens:", metrics.total_output))
-    print(
-        "{:<40} {:<10}".format(
-            "Total generated tokens (retokenized):", metrics.total_output_retokenized
+        print("{:<40} {:<10}".format("Backend:", backend))
+        print(
+            "{:<40} {:<10}".format(
+                "Traffic request rate:",
+                "trace" if use_trace_timestamps else request_rate,
+            )
         )
-    )
-    print(
-        "{:<40} {:<10.2f}".format(
-            "Request throughput (req/s):", metrics.request_throughput
+        print(
+            "{:<40} {:<10}".format(
+                "Max request concurrency:",
+                max_concurrency if max_concurrency else "not set",
+            )
         )
-    )
-    print(
-        "{:<40} {:<10.2f}".format(
-            "Input token throughput (tok/s):", metrics.input_throughput
+        print("{:<40} {:<10}".format("Successful requests:", metrics.completed))
+        print("{:<40} {:<10.2f}".format("Benchmark duration (s):", benchmark_duration))
+        print("{:<40} {:<10}".format("Total input tokens:", metrics.total_input))
+        print(
+            "{:<40} {:<10.2f}".format(
+                "Request throughput (req/s):", metrics.request_throughput
+            )
         )
-    )
-    print(
-        "{:<40} {:<10.2f}".format(
-            "Output token throughput (tok/s):", metrics.output_throughput
+        print(
+            "{:<40} {:<10.2f}".format(
+                "Input token throughput (tok/s):", metrics.input_throughput
+            )
         )
-    )
-    print(
-        "{:<40} {:<10.2f}".format(
-            "Peak output token throughput (tok/s):", metrics.max_output_tokens_per_s
+        print("{s:{c}^{n}}".format(s="End-to-End Latency", n=60, c="-"))
+        print(
+            "{:<40} {:<10.2f}".format(
+                "Mean E2E Latency (ms):", metrics.mean_e2e_latency_ms
+            )
         )
-    )
-    print(
-        "{:<40} {:<10}".format(
-            "Peak concurrent requests:", metrics.max_concurrent_requests
+        print(
+            "{:<40} {:<10.2f}".format(
+                "Median E2E Latency (ms):", metrics.median_e2e_latency_ms
+            )
         )
-    )
-    print(
-        "{:<40} {:<10.2f}".format(
-            "Total token throughput (tok/s):", metrics.total_throughput
+        print(
+            "{:<40} {:<10.2f}".format(
+                "P99 E2E Latency (ms):", metrics.p99_e2e_latency_ms
+            )
         )
-    )
-    print("{:<40} {:<10.2f}".format("Concurrency:", metrics.concurrency))
-    if accept_length:
-        print("{:<40} {:<10.2f}".format("Accept length:", accept_length))
-    print("{s:{c}^{n}}".format(s="End-to-End Latency", n=50, c="-"))
-    print(
-        "{:<40} {:<10.2f}".format("Mean E2E Latency (ms):", metrics.mean_e2e_latency_ms)
-    )
-    print(
-        "{:<40} {:<10.2f}".format(
-            "Median E2E Latency (ms):", metrics.median_e2e_latency_ms
+        print("=" * 60)
+    else:
+        print("\n{s:{c}^{n}}".format(s=" Serving Benchmark Result ", n=50, c="="))
+        print("{:<40} {:<10}".format("Backend:", backend))
+        print(
+            "{:<40} {:<10}".format(
+                "Traffic request rate:",
+                "trace" if use_trace_timestamps else request_rate,
+            )
         )
-    )
-    print(
-        "{:<40} {:<10.2f}".format("P90 E2E Latency (ms):", metrics.p90_e2e_latency_ms)
-    )
-    print(
-        "{:<40} {:<10.2f}".format("P99 E2E Latency (ms):", metrics.p99_e2e_latency_ms)
-    )
-    print("{s:{c}^{n}}".format(s="Time to First Token", n=50, c="-"))
-    print("{:<40} {:<10.2f}".format("Mean TTFT (ms):", metrics.mean_ttft_ms))
-    print("{:<40} {:<10.2f}".format("Median TTFT (ms):", metrics.median_ttft_ms))
-    print("{:<40} {:<10.2f}".format("P99 TTFT (ms):", metrics.p99_ttft_ms))
-    print(
-        "{s:{c}^{n}}".format(s="Time per Output Token (excl. 1st token)", n=50, c="-")
-    )
-    print("{:<40} {:<10.2f}".format("Mean TPOT (ms):", metrics.mean_tpot_ms))
-    print("{:<40} {:<10.2f}".format("Median TPOT (ms):", metrics.median_tpot_ms))
-    print("{:<40} {:<10.2f}".format("P99 TPOT (ms):", metrics.p99_tpot_ms))
-    print("{s:{c}^{n}}".format(s="Inter-Token Latency", n=50, c="-"))
-    print("{:<40} {:<10.2f}".format("Mean ITL (ms):", metrics.mean_itl_ms))
-    print("{:<40} {:<10.2f}".format("Median ITL (ms):", metrics.median_itl_ms))
-    print("{:<40} {:<10.2f}".format("P95 ITL (ms):", metrics.p95_itl_ms))
-    print("{:<40} {:<10.2f}".format("P99 ITL (ms):", metrics.p99_itl_ms))
-    print("{:<40} {:<10.2f}".format("Max ITL (ms):", metrics.max_itl_ms))
-    print("=" * 50)
+        print(
+            "{:<40} {:<10}".format(
+                "Max request concurrency:",
+                max_concurrency if max_concurrency else "not set",
+            )
+        )
+        print("{:<40} {:<10}".format("Successful requests:", metrics.completed))
+        print("{:<40} {:<10.2f}".format("Benchmark duration (s):", benchmark_duration))
+        print("{:<40} {:<10}".format("Total input tokens:", metrics.total_input))
+        print(
+            "{:<40} {:<10}".format("Total input text tokens:", metrics.total_input_text)
+        )
+        if args.dataset_name in ["image", "mmmu"]:
+            print(
+                "{:<40} {:<10}".format(
+                    "Total input vision tokens:", metrics.total_input_vision
+                )
+            )
+        print("{:<40} {:<10}".format("Total generated tokens:", metrics.total_output))
+        print(
+            "{:<40} {:<10}".format(
+                "Total generated tokens (retokenized):",
+                metrics.total_output_retokenized,
+            )
+        )
+        print(
+            "{:<40} {:<10.2f}".format(
+                "Request throughput (req/s):", metrics.request_throughput
+            )
+        )
+        print(
+            "{:<40} {:<10.2f}".format(
+                "Input token throughput (tok/s):", metrics.input_throughput
+            )
+        )
+        print(
+            "{:<40} {:<10.2f}".format(
+                "Output token throughput (tok/s):", metrics.output_throughput
+            )
+        )
+        print(
+            "{:<40} {:<10.2f}".format(
+                "Peak output token throughput (tok/s):",
+                metrics.max_output_tokens_per_s,
+            )
+        )
+        print(
+            "{:<40} {:<10}".format(
+                "Peak concurrent requests:", metrics.max_concurrent_requests
+            )
+        )
+        print(
+            "{:<40} {:<10.2f}".format(
+                "Total token throughput (tok/s):", metrics.total_throughput
+            )
+        )
+        print("{:<40} {:<10.2f}".format("Concurrency:", metrics.concurrency))
+        if accept_length:
+            print("{:<40} {:<10.2f}".format("Accept length:", accept_length))
+        print("{s:{c}^{n}}".format(s="End-to-End Latency", n=50, c="-"))
+        print(
+            "{:<40} {:<10.2f}".format(
+                "Mean E2E Latency (ms):", metrics.mean_e2e_latency_ms
+            )
+        )
+        print(
+            "{:<40} {:<10.2f}".format(
+                "Median E2E Latency (ms):", metrics.median_e2e_latency_ms
+            )
+        )
+        print(
+            "{:<40} {:<10.2f}".format(
+                "P90 E2E Latency (ms):", metrics.p90_e2e_latency_ms
+            )
+        )
+        print(
+            "{:<40} {:<10.2f}".format(
+                "P99 E2E Latency (ms):", metrics.p99_e2e_latency_ms
+            )
+        )
+        print("{s:{c}^{n}}".format(s="Time to First Token", n=50, c="-"))
+        print("{:<40} {:<10.2f}".format("Mean TTFT (ms):", metrics.mean_ttft_ms))
+        print("{:<40} {:<10.2f}".format("Median TTFT (ms):", metrics.median_ttft_ms))
+        print("{:<40} {:<10.2f}".format("P99 TTFT (ms):", metrics.p99_ttft_ms))
+        print(
+            "{s:{c}^{n}}".format(
+                s="Time per Output Token (excl. 1st token)", n=50, c="-"
+            )
+        )
+        print("{:<40} {:<10.2f}".format("Mean TPOT (ms):", metrics.mean_tpot_ms))
+        print("{:<40} {:<10.2f}".format("Median TPOT (ms):", metrics.median_tpot_ms))
+        print("{:<40} {:<10.2f}".format("P99 TPOT (ms):", metrics.p99_tpot_ms))
+        print("{s:{c}^{n}}".format(s="Inter-Token Latency", n=50, c="-"))
+        print("{:<40} {:<10.2f}".format("Mean ITL (ms):", metrics.mean_itl_ms))
+        print("{:<40} {:<10.2f}".format("Median ITL (ms):", metrics.median_itl_ms))
+        print("{:<40} {:<10.2f}".format("P95 ITL (ms):", metrics.p95_itl_ms))
+        print("{:<40} {:<10.2f}".format("P99 ITL (ms):", metrics.p99_itl_ms))
+        print("{:<40} {:<10.2f}".format("Max ITL (ms):", metrics.max_itl_ms))
+        print("=" * 50)
 
     resp = requests.get(base_url + "/get_server_info", headers=get_auth_headers())
     server_info = resp.json() if resp.status_code == 200 else None
 
-    if (
+    if is_embedding or (
         metrics.median_ttft_ms is not None
         and metrics.mean_itl_ms is not None
         and metrics.output_throughput is not None
@@ -1485,35 +1604,40 @@ async def benchmark(
             "total_input_tokens": metrics.total_input,
             "total_input_text_tokens": metrics.total_input_text,
             "total_input_vision_tokens": metrics.total_input_vision,
-            "total_output_tokens": metrics.total_output,
-            "total_output_tokens_retokenized": metrics.total_output_retokenized,
             "request_throughput": metrics.request_throughput,
             "input_throughput": metrics.input_throughput,
-            "output_throughput": metrics.output_throughput,
-            "total_throughput": metrics.total_throughput,
             "mean_e2e_latency_ms": metrics.mean_e2e_latency_ms,
             "median_e2e_latency_ms": metrics.median_e2e_latency_ms,
             "std_e2e_latency_ms": metrics.std_e2e_latency_ms,
             "p90_e2e_latency_ms": metrics.p90_e2e_latency_ms,
             "p99_e2e_latency_ms": metrics.p99_e2e_latency_ms,
-            "mean_ttft_ms": metrics.mean_ttft_ms,
-            "median_ttft_ms": metrics.median_ttft_ms,
-            "std_ttft_ms": metrics.std_ttft_ms,
-            "p99_ttft_ms": metrics.p99_ttft_ms,
-            "mean_tpot_ms": metrics.mean_tpot_ms,
-            "median_tpot_ms": metrics.median_tpot_ms,
-            "std_tpot_ms": metrics.std_tpot_ms,
-            "p99_tpot_ms": metrics.p99_tpot_ms,
-            "mean_itl_ms": metrics.mean_itl_ms,
-            "median_itl_ms": metrics.median_itl_ms,
-            "std_itl_ms": metrics.std_itl_ms,
-            "p95_itl_ms": metrics.p95_itl_ms,
-            "p99_itl_ms": metrics.p99_itl_ms,
             "concurrency": metrics.concurrency,
-            "accept_length": accept_length,
-            "max_output_tokens_per_s": metrics.max_output_tokens_per_s,
-            "max_concurrent_requests": metrics.max_concurrent_requests,
         }
+        if not is_embedding:
+            result.update(
+                {
+                    "total_output_tokens": metrics.total_output,
+                    "total_output_tokens_retokenized": metrics.total_output_retokenized,
+                    "output_throughput": metrics.output_throughput,
+                    "total_throughput": metrics.total_throughput,
+                    "mean_ttft_ms": metrics.mean_ttft_ms,
+                    "median_ttft_ms": metrics.median_ttft_ms,
+                    "std_ttft_ms": metrics.std_ttft_ms,
+                    "p99_ttft_ms": metrics.p99_ttft_ms,
+                    "mean_tpot_ms": metrics.mean_tpot_ms,
+                    "median_tpot_ms": metrics.median_tpot_ms,
+                    "std_tpot_ms": metrics.std_tpot_ms,
+                    "p99_tpot_ms": metrics.p99_tpot_ms,
+                    "mean_itl_ms": metrics.mean_itl_ms,
+                    "median_itl_ms": metrics.median_itl_ms,
+                    "std_itl_ms": metrics.std_itl_ms,
+                    "p95_itl_ms": metrics.p95_itl_ms,
+                    "p99_itl_ms": metrics.p99_itl_ms,
+                    "accept_length": accept_length,
+                    "max_output_tokens_per_s": metrics.max_output_tokens_per_s,
+                    "max_concurrent_requests": metrics.max_concurrent_requests,
+                }
+            )
     else:
         print(f"Error running benchmark for request rate: {request_rate}")
         print("-" * 30)
@@ -1523,7 +1647,11 @@ async def benchmark(
         output_file_name = args.output_file
     else:
         now = datetime.now().strftime("%m%d")
-        if args.dataset_name == "image":
+        if is_embedding:
+            output_file_name = (
+                f"embedding_{args.backend}_{now}_{args.num_prompts}.jsonl"
+            )
+        elif args.dataset_name == "image":
             output_file_name = (
                 f"{args.backend}_{now}_{args.num_prompts}_{args.random_input_len}_"
                 f"{args.random_output_len}_{args.image_count}imgs_"
@@ -1539,11 +1667,16 @@ async def benchmark(
     result_details = {
         "input_lens": [output.prompt_len for output in outputs],
         "output_lens": output_lens,
-        "ttfts": [output.ttft for output in outputs],
-        "itls": [output.itl for output in outputs],
-        "generated_texts": [output.generated_text for output in outputs],
         "errors": [output.error for output in outputs],
     }
+    if not is_embedding:
+        result_details.update(
+            {
+                "ttfts": [output.ttft for output in outputs],
+                "itls": [output.itl for output in outputs],
+                "generated_texts": [output.generated_text for output in outputs],
+            }
+        )
 
     # Append results to a JSONL file
     with open(output_file_name, "a") as file:
@@ -1574,6 +1707,10 @@ def set_global_args(args_: argparse.Namespace):
 def run_benchmark(args_: argparse.Namespace):
     global args
     args = args_
+
+    # Set default value for embedding if not present
+    if not hasattr(args, "embedding"):
+        args.embedding = False
 
     # Set default value for max_concurrency if not present
     if not hasattr(args, "max_concurrency"):
@@ -1691,6 +1828,14 @@ def run_benchmark(args_: argparse.Namespace):
             print(f"Server at {health_url} is not ready. Exiting.")
             sys.exit(1)
 
+    # Override api_url for embedding mode
+    if args.embedding:
+        api_url = (
+            f"{args.base_url}/v1/embeddings"
+            if args.base_url
+            else f"http://{args.host}:{args.port}/v1/embeddings"
+        )
+
     # Get model name
     if args.model is None:
         if args.backend == "truss":
@@ -1735,6 +1880,11 @@ def run_benchmark(args_: argparse.Namespace):
     ), f"Got invalid value for --lora-zipf-alpha of {args.lora_zipf_alpha}. It must be greater than 1."
 
     print(f"{args}\n")
+
+    # For embedding mode, override output lengths since we don't generate tokens
+    if args.embedding:
+        args.sharegpt_output_len = None
+        args.random_output_len = 1
 
     # Read dataset
     backend = args.backend
@@ -2210,6 +2360,11 @@ if __name__ == "__main__":
         nargs="+",
         default=None,
         help="Custom HTTP headers in Key=Value format. Example: --header MyHeader=MY_VALUE MyAnotherHeader=myanothervalue",
+    )
+    parser.add_argument(
+        "--embedding",
+        action="store_true",
+        help="Benchmark embedding models instead of generative models.",
     )
     args = parser.parse_args()
     run_benchmark(args)

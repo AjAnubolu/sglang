@@ -58,6 +58,7 @@ class BenchArgs:
     prompt_suffix: str = ""
     return_logprob: bool = False
     logprob_start_len: int = -1
+    embedding: bool = False
 
     @staticmethod
     def add_cli_args(parser: argparse.ArgumentParser):
@@ -196,6 +197,11 @@ class BenchArgs:
             default=-1,
             help="Start length for logprob. -1 means only return logprobs for output tokens (default). 0 means return logprobs for all tokens including input.",
         )
+        parser.add_argument(
+            "--embedding",
+            action="store_true",
+            help="Benchmark embedding models instead of generative models.",
+        )
 
     @classmethod
     def from_cli_args(cls, args: argparse.Namespace):
@@ -212,29 +218,26 @@ def throughput_test_once(
     profile: bool,
     return_logprob: bool = False,
     logprob_start_len: int = -1,
+    embedding: bool = False,
 ):
     measurement_results = {
         "backend": backend_name,
         "successful_requests": len(reqs),
         "total_latency": -1,
         "total_input_tokens": sum(r.prompt_len for r in reqs),
-        "total_output_tokens": -1,
         "request_throughput": -1,
         "input_throughput": -1,
-        "output_throughput": -1,
-        "total_throughput": -1,
     }
+    if not embedding:
+        measurement_results.update(
+            {
+                "total_output_tokens": -1,
+                "output_throughput": -1,
+                "total_throughput": -1,
+            }
+        )
 
     prompt = [r.prompt for r in reqs]
-    sampling_params = [
-        {
-            "temperature": 0,
-            "max_new_tokens": r.output_len,
-            "ignore_eos": ignore_eos,
-            **extra_request_body,
-        }
-        for r in reqs
-    ]
 
     if profile:
         assert (
@@ -244,12 +247,24 @@ def throughput_test_once(
         backend.start_profile()
 
     st = time.perf_counter()
-    gen_out = backend.generate(
-        prompt=prompt,
-        sampling_params=sampling_params,
-        return_logprob=return_logprob,
-        logprob_start_len=logprob_start_len,
-    )
+    if embedding:
+        out = backend.encode(prompt=prompt)
+    else:
+        sampling_params = [
+            {
+                "temperature": 0,
+                "max_new_tokens": r.output_len,
+                "ignore_eos": ignore_eos,
+                **extra_request_body,
+            }
+            for r in reqs
+        ]
+        out = backend.generate(
+            prompt=prompt,
+            sampling_params=sampling_params,
+            return_logprob=return_logprob,
+            logprob_start_len=logprob_start_len,
+        )
     latency = time.perf_counter() - st
 
     if profile:
@@ -259,34 +274,35 @@ def throughput_test_once(
         monitor_trace_file(known_files, dir)
 
     if backend_name == "runtime":
-        gen_out = json.loads(gen_out)
-
-    server_info = backend.get_server_info()
+        out = json.loads(out)
 
     measurement_results["total_latency"] = latency
-    measurement_results["total_output_tokens"] = sum(
-        o["meta_info"]["completion_tokens"] for o in gen_out
-    )
     measurement_results["request_throughput"] = (
         measurement_results["successful_requests"] / latency
     )
     measurement_results["input_throughput"] = (
         measurement_results["total_input_tokens"] / latency
     )
-    measurement_results["output_throughput"] = (
-        measurement_results["total_output_tokens"] / latency
-    )
-    measurement_results["total_throughput"] = (
-        measurement_results["total_input_tokens"]
-        + measurement_results["total_output_tokens"]
-    ) / latency
 
-    if inspect.isawaitable(server_info):
-        server_info = asyncio.run(server_info)
+    if not embedding:
+        server_info = backend.get_server_info()
+        measurement_results["total_output_tokens"] = sum(
+            o["meta_info"]["completion_tokens"] for o in out
+        )
+        measurement_results["output_throughput"] = (
+            measurement_results["total_output_tokens"] / latency
+        )
+        measurement_results["total_throughput"] = (
+            measurement_results["total_input_tokens"]
+            + measurement_results["total_output_tokens"]
+        ) / latency
 
-    measurement_results["last_gen_throughput"] = server_info["internal_states"][0][
-        "last_gen_throughput"
-    ]
+        if inspect.isawaitable(server_info):
+            server_info = asyncio.run(server_info)
+
+        measurement_results["last_gen_throughput"] = server_info["internal_states"][0][
+            "last_gen_throughput"
+        ]
 
     return measurement_results
 
@@ -349,12 +365,17 @@ def throughput_test(
     if bench_args.extra_request_body:
         extra_request_body = json.loads(args.extra_request_body)
 
+    # For embedding mode, override output lengths since we don't generate tokens
+    if bench_args.embedding:
+        bench_args.sharegpt_output_len = None
+        bench_args.random_output_len = 1
+
     # Read dataset
     input_requests = get_dataset(bench_args, tokenizer)
 
     warmup_requests = sample_random_requests(
         input_len=256,
-        output_len=16,
+        output_len=1 if bench_args.embedding else 16,
         num_prompts=min(bench_args.num_prompts, 16),
         range_ratio=1.0,
         tokenizer=tokenizer,
@@ -373,6 +394,7 @@ def throughput_test(
             profile=False,
             return_logprob=bench_args.return_logprob,
             logprob_start_len=bench_args.logprob_start_len,
+            embedding=bench_args.embedding,
         )
         time.sleep(0.5)
 
@@ -386,6 +408,7 @@ def throughput_test(
         profile=bench_args.profile,
         return_logprob=bench_args.return_logprob,
         logprob_start_len=bench_args.logprob_start_len,
+        embedding=bench_args.embedding,
     )
     backend.shutdown()
 
@@ -393,42 +416,88 @@ def throughput_test(
         with open(bench_args.result_filename, "a") as fout:
             fout.write(json.dumps(result) + "\n")
 
-    print(
-        "\n{s:{c}^{n}}".format(s=" Offline Throughput Benchmark Result ", n=50, c="=")
-    )
-    print("{:<40} {:<10}".format("Backend:", result["backend"]))
-    print("{:<40} {:<10}".format("Successful requests:", result["successful_requests"]))
-    print("{:<40} {:<10.2f}".format("Benchmark duration (s):", result["total_latency"]))
-    print("{:<40} {:<10}".format("Total input tokens:", result["total_input_tokens"]))
-    print(
-        "{:<40} {:<10}".format("Total generated tokens:", result["total_output_tokens"])
-    )
-    print(
-        "{:<40} {:<10.2f}".format(
-            "Last generation throughput (tok/s):", result["last_gen_throughput"]
+    if bench_args.embedding:
+        print(
+            "\n{s:{c}^{n}}".format(
+                s=" Offline Embedding Throughput Benchmark Result ", n=60, c="="
+            )
         )
-    )
-    print(
-        "{:<40} {:<10.2f}".format(
-            "Request throughput (req/s):", result["request_throughput"]
+        print("{:<40} {:<10}".format("Backend:", result["backend"]))
+        print(
+            "{:<40} {:<10}".format(
+                "Successful requests:", result["successful_requests"]
+            )
         )
-    )
-    print(
-        "{:<40} {:<10.2f}".format(
-            "Input token throughput (tok/s):", result["input_throughput"]
+        print(
+            "{:<40} {:<10.2f}".format(
+                "Benchmark duration (s):", result["total_latency"]
+            )
         )
-    )
-    print(
-        "{:<40} {:<10.2f}".format(
-            "Output token throughput (tok/s):", result["output_throughput"]
+        print(
+            "{:<40} {:<10}".format("Total input tokens:", result["total_input_tokens"])
         )
-    )
-    print(
-        "{:<40} {:<10.2f}".format(
-            "Total token throughput (tok/s):", result["total_throughput"]
+        print(
+            "{:<40} {:<10.2f}".format(
+                "Request throughput (req/s):", result["request_throughput"]
+            )
         )
-    )
-    print("=" * 50)
+        print(
+            "{:<40} {:<10.2f}".format(
+                "Input token throughput (tok/s):", result["input_throughput"]
+            )
+        )
+        print("=" * 60)
+    else:
+        print(
+            "\n{s:{c}^{n}}".format(
+                s=" Offline Throughput Benchmark Result ", n=50, c="="
+            )
+        )
+        print("{:<40} {:<10}".format("Backend:", result["backend"]))
+        print(
+            "{:<40} {:<10}".format(
+                "Successful requests:", result["successful_requests"]
+            )
+        )
+        print(
+            "{:<40} {:<10.2f}".format(
+                "Benchmark duration (s):", result["total_latency"]
+            )
+        )
+        print(
+            "{:<40} {:<10}".format("Total input tokens:", result["total_input_tokens"])
+        )
+        print(
+            "{:<40} {:<10}".format(
+                "Total generated tokens:", result["total_output_tokens"]
+            )
+        )
+        print(
+            "{:<40} {:<10.2f}".format(
+                "Last generation throughput (tok/s):", result["last_gen_throughput"]
+            )
+        )
+        print(
+            "{:<40} {:<10.2f}".format(
+                "Request throughput (req/s):", result["request_throughput"]
+            )
+        )
+        print(
+            "{:<40} {:<10.2f}".format(
+                "Input token throughput (tok/s):", result["input_throughput"]
+            )
+        )
+        print(
+            "{:<40} {:<10.2f}".format(
+                "Output token throughput (tok/s):", result["output_throughput"]
+            )
+        )
+        print(
+            "{:<40} {:<10.2f}".format(
+                "Total token throughput (tok/s):", result["total_throughput"]
+            )
+        )
+        print("=" * 50)
 
     return result
 
@@ -460,6 +529,9 @@ if __name__ == "__main__":
 
     server_args = ServerArgs.from_cli_args(args)
     bench_args = BenchArgs.from_cli_args(args)
+
+    if bench_args.embedding:
+        server_args.is_embedding = True
 
     logging.basicConfig(
         level=getattr(logging, server_args.log_level.upper()),
