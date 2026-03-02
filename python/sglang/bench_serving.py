@@ -224,9 +224,9 @@ async def async_request_openai_completions(
     pbar: Optional[tqdm] = None,
 ) -> RequestFuncOutput:
     api_url = request_func_input.api_url
-    assert api_url.endswith(
-        "completions"
-    ), "OpenAI Completions API URL must end with 'completions'."
+    assert api_url.endswith("completions"), (
+        "OpenAI Completions API URL must end with 'completions'."
+    )
 
     prompt = request_func_input.prompt
 
@@ -349,9 +349,9 @@ async def async_request_openai_chat_completions(
                            latency, TTFT, ITL, and success status.
     """
     api_url = request_func_input.api_url
-    assert api_url.endswith(
-        "chat/completions"
-    ), "OpenAI Chat Completions API URL must end with 'chat/completions'."
+    assert api_url.endswith("chat/completions"), (
+        "OpenAI Chat Completions API URL must end with 'chat/completions'."
+    )
 
     # TODO put it to other functions when `pbar` logic is refactored
     if getattr(args, "print_requests", False):
@@ -1111,9 +1111,9 @@ MULTI_TURN_BACKENDS = {"sglang-oai-chat", "vllm-chat", "lmdeploy-chat"}
 
 
 def wrap_multi_turn_request_func(request_func: Callable, backend: str) -> Callable:
-    assert (
-        backend in MULTI_TURN_BACKENDS
-    ), f"Multi-turn only supports chat backends: {MULTI_TURN_BACKENDS}, got {backend}"
+    assert backend in MULTI_TURN_BACKENDS, (
+        f"Multi-turn only supports chat backends: {MULTI_TURN_BACKENDS}, got {backend}"
+    )
 
     async def f(
         request_func_input: RequestFuncInput,
@@ -1167,7 +1167,7 @@ async def benchmark(
     profile_prefill_url: Optional[List[str]] = None,
     profile_decode_url: Optional[List[str]] = None,
 ):
-    is_embedding = getattr(args, "embedding", False)
+    is_embedding = args.dataset_name == "embedding"
 
     if is_embedding:
         request_func = async_request_embedding
@@ -1333,9 +1333,9 @@ async def benchmark(
                 lora_name = lora_names[lora_idx]
                 lora_idx = (lora_idx + 1) % len(lora_names)
             else:
-                assert (
-                    lora_request_distribution == "skewed"
-                ), f"Unexpected lora_request_distribution: {lora_request_distribution}. Expected 'skewed'."
+                assert lora_request_distribution == "skewed", (
+                    f"Unexpected lora_request_distribution: {lora_request_distribution}. Expected 'skewed'."
+                )
 
                 lora_name = np.random.choice(lora_names, p=lora_probs)
         else:
@@ -1708,10 +1708,6 @@ def run_benchmark(args_: argparse.Namespace):
     global args
     args = args_
 
-    # Set default value for embedding if not present
-    if not hasattr(args, "embedding"):
-        args.embedding = False
-
     # Set default value for max_concurrency if not present
     if not hasattr(args, "max_concurrency"):
         args.max_concurrency = None
@@ -1758,9 +1754,9 @@ def run_benchmark(args_: argparse.Namespace):
         extra_request_body = json.loads(args.extra_request_body)
 
     if args.tokenize_prompt:
-        assert (
-            args.backend == "sglang"
-        ), "`--tokenize-prompt` only compatible with `--backend sglang` currently"
+        assert args.backend == "sglang", (
+            "`--tokenize-prompt` only compatible with `--backend sglang` currently"
+        )
 
     # Set url
     if args.port is None:
@@ -1829,7 +1825,8 @@ def run_benchmark(args_: argparse.Namespace):
             sys.exit(1)
 
     # Override api_url for embedding mode
-    if args.embedding:
+    is_embedding = args.dataset_name == "embedding"
+    if is_embedding:
         api_url = (
             f"{args.base_url}/v1/embeddings"
             if args.base_url
@@ -1866,25 +1863,20 @@ def run_benchmark(args_: argparse.Namespace):
 
     if args.dataset_name in ["image", "mmmu"]:
         args.apply_chat_template = True
-        assert (
-            not args.tokenize_prompt
-        ), "`--tokenize-prompt` not compatible with image dataset"
+        assert not args.tokenize_prompt, (
+            "`--tokenize-prompt` not compatible with image dataset"
+        )
 
     if args.lora_request_distribution in ["distinct", "skewed"]:
-        assert (
-            args.lora_name is not None and len(args.lora_name) > 1
-        ), "More than 1 LoRA adapter must be specified via --lora-name to use 'distinct' or 'skewed' request distribution."
+        assert args.lora_name is not None and len(args.lora_name) > 1, (
+            "More than 1 LoRA adapter must be specified via --lora-name to use 'distinct' or 'skewed' request distribution."
+        )
 
-    assert (
-        args.lora_zipf_alpha > 1
-    ), f"Got invalid value for --lora-zipf-alpha of {args.lora_zipf_alpha}. It must be greater than 1."
+    assert args.lora_zipf_alpha > 1, (
+        f"Got invalid value for --lora-zipf-alpha of {args.lora_zipf_alpha}. It must be greater than 1."
+    )
 
     print(f"{args}\n")
-
-    # For embedding mode, override output lengths since we don't generate tokens
-    if args.embedding:
-        args.sharegpt_output_len = None
-        args.random_output_len = 1
 
     # Read dataset
     backend = args.backend
@@ -1986,6 +1978,7 @@ if __name__ == "__main__":
             "mmmu",
             "image",
             "mooncake",
+            "embedding",
         ],
         help="Name of the dataset to benchmark on.",
     )
@@ -2069,13 +2062,13 @@ if __name__ == "__main__":
         "--image-format",
         type=str,
         default="jpeg",
-        help=("Format of images for image dataset. " "Supports jpeg and png."),
+        help=("Format of images for image dataset. Supports jpeg and png."),
     )
     parser.add_argument(
         "--image-content",
         type=str,
         default="random",
-        help=("Content for images for image dataset. " "Supports random and blank."),
+        help=("Content for images for image dataset. Supports random and blank."),
     )
     parser.add_argument(
         "--request-rate",
@@ -2360,11 +2353,6 @@ if __name__ == "__main__":
         nargs="+",
         default=None,
         help="Custom HTTP headers in Key=Value format. Example: --header MyHeader=MY_VALUE MyAnotherHeader=myanothervalue",
-    )
-    parser.add_argument(
-        "--embedding",
-        action="store_true",
-        help="Benchmark embedding models instead of generative models.",
     )
     args = parser.parse_args()
     run_benchmark(args)

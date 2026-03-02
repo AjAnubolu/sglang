@@ -2,6 +2,7 @@ from typing import Dict, Type
 
 from sglang.benchmark.datasets.common import BaseDataset, DatasetRow
 from sglang.benchmark.datasets.custom import CustomDataset
+from sglang.benchmark.datasets.embedding import EmbeddingDataset
 from sglang.benchmark.datasets.generated_shared_prefix import (
     GeneratedSharedPrefixDataset,
 )
@@ -24,6 +25,7 @@ DATASET_MAPPING: Dict[str, Type[BaseDataset]] = {
     "mmmu": MMMUDataset,
     "image": ImageDataset,
     "mooncake": MooncakeDataset,
+    "embedding": EmbeddingDataset,
 }
 
 
