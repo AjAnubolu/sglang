@@ -712,9 +712,11 @@ class Qwen3_5ForCausalLM(nn.Module):
                 is_nextn=is_nextn,
             )
 
-        self.layers = make_layers(
+        self.layers, self.start_layer, self.end_layer = make_layers(
             config.num_hidden_layers,
             get_layer,
+            pp_rank=self.pp_group.rank_in_group,
+            pp_size=self.pp_group.world_size,
             prefix=f"{prefix}.layers",
         )
 
@@ -735,7 +737,7 @@ class Qwen3_5ForCausalLM(nn.Module):
         if self.pp_group.is_last_rank:
             self.norm = GemmaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         else:
-            self.norm = PPMissingLayer()
+            self.norm = PPMissingLayer(return_tuple=True)
 
     def get_input_embeddings(self):
         return self.embed_tokens
