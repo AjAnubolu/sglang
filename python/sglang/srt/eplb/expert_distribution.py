@@ -392,7 +392,7 @@ class _DetailSinglePassGatherer(_SinglePassGatherer):
         super().on_forward_pass_start(forward_batch)
         assert self._metadata is None
         self._metadata = dict(
-            rids=forward_batch.rids,
+            rids=self._rids,
             input_ids=forward_batch.input_ids.cpu().tolist(),
             positions=forward_batch.positions.cpu().tolist(),
             extend_seq_lens=forward_batch.extend_seq_lens_cpu,
@@ -689,7 +689,10 @@ class _UtilizationRateAccumulatorMixin(_Accumulator):
         if self._enable:
             rids = single_pass_data.get("rids")
             return self._append_utilization_rate(
-                forward_pass_id, single_pass_data["global_physical_count"], outputs, rids=rids
+                forward_pass_id,
+                single_pass_data["global_physical_count"],
+                outputs,
+                rids=rids,
             )
 
     def reset(self):
