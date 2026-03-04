@@ -371,29 +371,55 @@ class _DetailSinglePassGatherer(_SinglePassGatherer):
     ):
         super().__init__(expert_location_metadata, rank)
         self._metadata: Optional[Dict[str, Any]] = None
+        max_tokens = server_args.chunked_prefill_size * 8
         self._topk_ids_of_layer = torch.zeros(
             (
                 expert_location_metadata.num_layers,
                 # TODO determine the max number
-                server_args.chunked_prefill_size * 8,
+                max_tokens,
                 self._TOP_K_NUM,
             ),
             dtype=torch.int32,
             device=server_args.device,
         )
-        self._misc_objects: List[Dict[str, Any]] = []
         assert (
             not server_args.enable_two_batch_overlap
         ), "DetailSinglePassGatherer does not support TBO yet"
         # TODO assert shared experts fusion is disabled, o/w data is wrong
 
+        # Async copy infrastructure: pinned CPU buffers + dedicated CUDA stream
+        self._stream = torch.cuda.Stream(device=server_args.device)
+        self._copy_event: Optional[torch.cuda.Event] = None
+        self._num_tokens = 0
+        self._input_ids_cpu = torch.empty(
+            max_tokens, dtype=torch.int64, pin_memory=True
+        )
+        self._positions_cpu = torch.empty(
+            max_tokens, dtype=torch.int64, pin_memory=True
+        )
+        self._topk_ids_cpu = torch.empty(
+            (expert_location_metadata.num_layers, max_tokens, self._TOP_K_NUM),
+            dtype=torch.int32,
+            pin_memory=True,
+        )
+        self._dispatch_copies: List[
+            Tuple[int, Dict[str, torch.Tensor], torch.cuda.Event]
+        ] = []
+
     def on_forward_pass_start(self, forward_batch: ForwardBatch):
         assert self._metadata is None
+        n = forward_batch.input_ids.shape[0]
+        self._num_tokens = n
+        # Async copy GPU tensors to pre-allocated pinned CPU buffers
+        self._stream.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(self._stream):
+            self._input_ids_cpu[:n].copy_(forward_batch.input_ids, non_blocking=True)
+            self._positions_cpu[:n].copy_(forward_batch.positions, non_blocking=True)
+        self._copy_event = self._stream.record_event()
+        # Store only CPU-side metadata (no GPU sync)
         self._metadata = dict(
             # TODO pr-chain
             # rids=forward_batch.rids,
-            input_ids=forward_batch.input_ids.cpu().tolist(),
-            positions=forward_batch.positions.cpu().tolist(),
             extend_seq_lens=forward_batch.extend_seq_lens_cpu,
             forward_mode=forward_batch.forward_mode.value,
         )
@@ -411,34 +437,73 @@ class _DetailSinglePassGatherer(_SinglePassGatherer):
         num_tokens_per_rdma_rank,
         num_tokens_per_expert,
     ):
-        self._misc_objects.append(
-            dict(
-                layer_id=layer_idx,
-                num_tokens_per_rank=num_tokens_per_rank.cpu().tolist(),
-                num_tokens_per_rdma_rank=num_tokens_per_rdma_rank.cpu().tolist(),
-                num_tokens_per_expert=num_tokens_per_expert.cpu().tolist(),
-            )
-        )
+        # Async copy dispatch tensors to pinned CPU memory
+        copies = {}
+        self._stream.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(self._stream):
+            for name, tensor in [
+                ("num_tokens_per_rank", num_tokens_per_rank),
+                ("num_tokens_per_rdma_rank", num_tokens_per_rdma_rank),
+                ("num_tokens_per_expert", num_tokens_per_expert),
+            ]:
+                pinned = torch.empty_like(tensor, device="cpu", pin_memory=True)
+                pinned.copy_(tensor, non_blocking=True)
+                copies[name] = pinned
+        event = self._stream.record_event()
+        self._dispatch_copies.append((layer_idx, copies, event))
 
     def reset(self):
         self._topk_ids_of_layer[...] = -1
-        self._misc_objects.clear()
+        self._dispatch_copies.clear()
         self._metadata = None
+        self._copy_event = None
+        self._num_tokens = 0
 
     def collect(self) -> Dict:
-        num_tokens = len(self._metadata["input_ids"])
+        n = self._num_tokens
+
+        # Sync forward-pass-start async copies, then read from pinned buffers
+        if self._copy_event is not None:
+            self._copy_event.synchronize()
+        metadata = dict(
+            **self._metadata,
+            input_ids=self._input_ids_cpu[:n].tolist(),
+            positions=self._positions_cpu[:n].tolist(),
+        )
+
+        # Async copy topk_ids to pinned buffer
+        self._stream.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(self._stream):
+            self._topk_ids_cpu.copy_(self._topk_ids_of_layer, non_blocking=True)
+        self._stream.synchronize()
+        topk_ids_result = self._topk_ids_cpu[:, :n, :].clone()
+
+        # Sync and collect dispatch tensor copies
+        misc_objects = []
+        for layer_idx, copies, event in self._dispatch_copies:
+            event.synchronize()
+            misc_objects.append(
+                dict(
+                    layer_id=layer_idx,
+                    num_tokens_per_rank=copies["num_tokens_per_rank"].tolist(),
+                    num_tokens_per_rdma_rank=copies[
+                        "num_tokens_per_rdma_rank"
+                    ].tolist(),
+                    num_tokens_per_expert=copies["num_tokens_per_expert"].tolist(),
+                )
+            )
 
         global_physical_count = _convert_per_token_to_global_physical_count(
-            num_tokens,
+            n,
             num_layers=self._expert_location_metadata.num_layers,
             num_physical_experts=self._expert_location_metadata.num_physical_experts,
             _topk_ids_of_layer=self._topk_ids_of_layer,
         )
 
         return dict(
-            **self._metadata,
-            topk_ids_of_layer=self._topk_ids_of_layer[:, :num_tokens, :].clone().cpu(),
-            misc_objects=self._misc_objects,
+            **metadata,
+            topk_ids_of_layer=topk_ids_result,
+            misc_objects=misc_objects,
             global_physical_count=global_physical_count,
         )
 
