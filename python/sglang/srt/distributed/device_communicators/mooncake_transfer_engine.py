@@ -1,3 +1,4 @@
+import ast
 import json
 import logging
 import os
@@ -18,8 +19,9 @@ def get_ib_devices_for_gpu(ib_device_str: Optional[str], gpu_id: int) -> Optiona
 
     Supports all the following formats:
     1. Old format: "ib0, ib1, ib2"
-    2. New format: {0: "ib0, ib1", 1: "ib2, ib3", 2: "ib4"}
-    3. JSON file: path to a JSON file containing the mapping
+    2. New format (JSON): {"0": "ib0, ib1", "1": "ib2, ib3", "2": "ib4"}
+    3. New format (Python dict): {0: "ib0, ib1", 1: "ib2, ib3", 2: "ib4"}
+    4. JSON file: path to a JSON file containing the mapping
 
     Args:
         ib_device_str: The original IB device string or path to JSON file
@@ -47,47 +49,55 @@ def get_ib_devices_for_gpu(ib_device_str: Optional[str], gpu_id: int) -> Optiona
             # File reading failed, raise exception
             raise RuntimeError(f"Failed to read JSON file {ib_device_str}: {e}") from e
 
-    # Check if it's JSON format (new format)
+    # Try to parse as a dict mapping (JSON or Python dict syntax)
+    parsed_dict = None
     try:
-        parsed_json = json.loads(ib_device_str)
-        if isinstance(parsed_json, dict):
-            # Validate format - keys should be integers (or string rep), values should be strings
-            gpu_mapping = {}
-            for gpu_key, ib_devices in parsed_json.items():
-                if (
-                    isinstance(gpu_key, str)
-                    and gpu_key.isdigit()
-                    and isinstance(ib_devices, str)
-                ):
-                    gpu_mapping[int(gpu_key)] = ib_devices.strip()
-                elif isinstance(gpu_key, int) and isinstance(ib_devices, str):
-                    gpu_mapping[gpu_key] = ib_devices.strip()
-                else:
-                    raise ValueError(
-                        "Invalid format: keys must be integers (or string "
-                        "representations of integers) and values must be strings"
-                    )
+        parsed_dict = json.loads(ib_device_str)
+    except json.JSONDecodeError:
+        # JSON failed; try Python dict syntax (e.g., {0: "ib0, ib1"})
+        # which uses integer keys that are invalid in JSON
+        if not is_json_file:
+            try:
+                parsed_dict = ast.literal_eval(ib_device_str)
+            except (ValueError, SyntaxError):
+                pass
 
-            if not gpu_mapping:
-                raise ValueError("No valid GPU mappings found in JSON")
-
-            # Return devices for specific GPU
-            if gpu_id in gpu_mapping:
-                return gpu_mapping[gpu_id]
+    if isinstance(parsed_dict, dict):
+        # Validate format - keys should be integers (or string rep), values should be strings
+        gpu_mapping = {}
+        for gpu_key, ib_devices in parsed_dict.items():
+            if (
+                isinstance(gpu_key, str)
+                and gpu_key.isdigit()
+                and isinstance(ib_devices, str)
+            ):
+                gpu_mapping[int(gpu_key)] = ib_devices.strip()
+            elif isinstance(gpu_key, int) and isinstance(ib_devices, str):
+                gpu_mapping[gpu_key] = ib_devices.strip()
             else:
                 raise ValueError(
-                    f"No IB devices configured for GPU {gpu_id}. "
-                    f"Available GPUs: {list(gpu_mapping.keys())}"
+                    "Invalid format: keys must be integers (or string "
+                    "representations of integers) and values must be strings"
                 )
 
-    except json.JSONDecodeError:
-        if is_json_file:
-            # It was supposed to be a JSON file but failed to parse
-            raise RuntimeError(
-                f"Failed to parse JSON content from file {ib_device_str}"
+        if not gpu_mapping:
+            raise ValueError("No valid GPU mappings found in mapping")
+
+        # Return devices for specific GPU
+        if gpu_id in gpu_mapping:
+            return gpu_mapping[gpu_id]
+        else:
+            raise ValueError(
+                f"No IB devices configured for GPU {gpu_id}. "
+                f"Available GPUs: {list(gpu_mapping.keys())}"
             )
-        # Not JSON format, treat as old format - return same devices for all GPUs
-        return ib_device_str
+
+    if is_json_file:
+        # It was supposed to be a JSON file but failed to parse
+        raise RuntimeError(f"Failed to parse JSON content from file {ib_device_str}")
+
+    # Not a dict format, treat as old format - return same devices for all GPUs
+    return ib_device_str
 
 
 class MooncakeTransferEngine:
