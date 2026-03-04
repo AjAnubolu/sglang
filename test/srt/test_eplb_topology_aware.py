@@ -10,8 +10,6 @@ import torch
 from sglang.srt.eplb.eplb_algorithms.deepseek import (
     rebalance_experts_hierarchical,
     rebalance_experts_topology_aware,
-)
-from sglang.srt.eplb.eplb_algorithms.deepseek import (
     rebalance_experts_topology_aware_entry,
 )
 from sglang.srt.eplb.utils import inter_node_traffic_ratio
