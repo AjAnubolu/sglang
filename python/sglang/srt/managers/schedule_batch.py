@@ -1205,7 +1205,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
     seq_lens: torch.Tensor = None  # shape: [b], int64
     seq_lens_cpu: torch.Tensor = None  # shape: [b], int64
     # The output locations of the KV cache
-    out_cache_loc: torch.Tensor = None  # shape: [b], int64
+    out_cache_loc: torch.Tensor = None  # shape: [b], int32
     output_ids: torch.Tensor = None  # shape: [b], int64
 
     # For hybrid GDN prefix cache
