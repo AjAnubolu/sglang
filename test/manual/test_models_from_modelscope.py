@@ -10,10 +10,11 @@ from sglang.test.test_utils import CustomTestCase
 
 def prepare_model_and_tokenizer(model_path: str, tokenizer_path: str):
     if get_bool_env_var("SGLANG_USE_MODELSCOPE"):
-        if not os.path.exists(model_path):
-            from modelscope import snapshot_download
+        from modelscope import snapshot_download
 
+        if not os.path.exists(model_path):
             model_path = snapshot_download(model_path)
+        if not os.path.exists(tokenizer_path):
             tokenizer_path = snapshot_download(
                 tokenizer_path, ignore_patterns=["*.bin", "*.safetensors"]
             )
