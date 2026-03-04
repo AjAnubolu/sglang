@@ -471,7 +471,7 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
                 )
                 to_free_slots = torch.empty(
                     (to_free_num_slots.sum().item(),),
-                    dtype=torch.int64,
+                    dtype=torch.int32,
                     device=to_free_num_slots.device,
                 )
 
@@ -563,7 +563,7 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
                 else:
                     batch.out_cache_loc = torch.empty(
                         len(unfinished_index) + sum(draft_input_accept_length_cpu),
-                        dtype=torch.int64,
+                        dtype=torch.int32,
                         device=predict.device,
                     )
                     accept_length_filter = create_accept_length_filter(

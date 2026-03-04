@@ -456,7 +456,7 @@ def alloc_for_decode(batch: ScheduleBatch, token_per_req: int) -> torch.Tensor:
         locs = batch.seq_lens.clone()
 
     batch.req_to_token_pool.write(
-        (batch.req_pool_indices, locs), out_cache_loc.to(torch.int32)
+        (batch.req_pool_indices, locs), out_cache_loc
     )
 
     return out_cache_loc
