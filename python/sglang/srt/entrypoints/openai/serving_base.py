@@ -201,11 +201,12 @@ class OpenAIServingBase(ABC):
     def _sanitize_internal_error(self, e: Exception) -> ORJSONResponse:
         """Sanitize internal errors, logging full details server-side."""
         error_id = secrets.token_hex(6)
+        tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
         logger.error(
             "Internal error [error_id=%s]: %s\n%s",
             error_id,
             e,
-            traceback.format_exc(),
+            tb,
         )
         if (
             isinstance(self.tokenizer_manager.server_args, ServerArgs)

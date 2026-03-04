@@ -382,11 +382,12 @@ class OpenAIServingCompletion(OpenAIServingBase):
 
         except Exception as e:
             error_id = secrets.token_hex(6)
+            tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
             logger.error(
                 "Streaming error [error_id=%s]: %s\n%s",
                 error_id,
                 e,
-                traceback.format_exc(),
+                tb,
             )
             if (
                 isinstance(self.tokenizer_manager.server_args, ServerArgs)
@@ -395,7 +396,7 @@ class OpenAIServingCompletion(OpenAIServingBase):
                 error = self.create_streaming_error_response(str(e))
             else:
                 error = self.create_streaming_error_response(
-                    f"Internal server error. Error ID: {error_id}"
+                    f"Internal server error. Please contact the administrator. Error ID: {error_id}"
                 )
             yield f"data: {error}\n\n"
 

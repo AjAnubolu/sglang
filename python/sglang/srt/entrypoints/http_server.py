@@ -1744,11 +1744,12 @@ async def general_exception_handler(request: Request, exc: Exception):
 def _sanitize_error_message(e: Exception) -> str:
     """Generate a sanitized error message with a unique error_id for correlation."""
     error_id = secrets.token_hex(6)
+    tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
     logger.error(
         "Internal error [error_id=%s]: %s\n%s",
         error_id,
         e,
-        traceback.format_exc(),
+        tb,
     )
     return (
         f"Internal server error. Please contact the administrator. Error ID: {error_id}"
