@@ -1,0 +1,19 @@
+# Localhost / internal network URLs used in examples and code snippets
+http://localhost
+http://127\.0\.0\.1
+http://0\.0\.0\.0
+http://worker\d*
+http://P_IP
+http://D_IP
+
+# Placeholder / templated URLs
+http://.*\{port\}
+http://.*\{.*\}
+
+# Sites that block automated requests or require authentication
+https://platform\.openai\.com
+https://api\.openai\.com
+https://www\.nvidia\.com
+
+# Download links that are large or redirect
+https://download\.pytorch\.org
