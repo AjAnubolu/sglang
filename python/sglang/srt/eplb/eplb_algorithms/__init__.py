@@ -13,6 +13,7 @@ class EplbAlgorithm(Enum):
     deepseek_vec = auto()
     deepseek_vec_hierarchical = auto()
     elasticity_aware = auto()
+    topology_aware = auto()
     # TODO may have more algorithm later
 
 
@@ -60,6 +61,15 @@ def rebalance_experts(
                 if ElasticEPStateManager.instance() is not None
                 else ElasticEPStateManager.healthy_rank_state()
             ),
+        )
+
+    if algorithm == EplbAlgorithm.topology_aware:
+        return deepseek.rebalance_experts_topology_aware_entry(
+            weight=tokens_per_expert.sum(dim=0),
+            num_replicas=num_physical_experts,
+            num_groups=num_groups,
+            num_nodes=num_nodes,
+            num_gpus=num_physical_experts // num_local_physical_experts,
         )
 
     raise NotImplementedError
