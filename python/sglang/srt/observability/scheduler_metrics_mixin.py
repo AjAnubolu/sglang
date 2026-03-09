@@ -326,6 +326,17 @@ class SchedulerMetricsMixin:
         self.spec_total_num_accepted_tokens = 0
         self.spec_total_num_forward_ct = 0
 
+    def _compute_avg_queue_latency(self: Scheduler) -> float:
+        if not self.waiting_queue:
+            return 0.0
+        now = time.perf_counter()
+        waits = [
+            now - req.time_stats.wait_queue_entry_time
+            for req in self.waiting_queue
+            if req.time_stats.wait_queue_entry_time > 0.0
+        ]
+        return sum(waits) / len(waits) if waits else 0.0
+
     def report_prefill_stats(
         self: Scheduler,
         prefill_stats: PrefillStats,
@@ -426,6 +437,7 @@ class SchedulerMetricsMixin:
             )
             self.stats.num_grammar_queue_reqs = len(self.grammar_manager)
             self.stats.cache_hit_rate = cache_hit_rate
+            self.stats.avg_request_queue_latency = self._compute_avg_queue_latency()
 
             self.stats.max_total_num_tokens = self.max_total_num_tokens
 
@@ -604,6 +616,7 @@ class SchedulerMetricsMixin:
             )
             self.stats.num_grammar_queue_reqs = len(self.grammar_manager)
             self.stats.cache_hit_rate = cache_hit_rate
+            self.stats.avg_request_queue_latency = self._compute_avg_queue_latency()
 
             self.stats.max_total_num_tokens = self.max_total_num_tokens
             self.stats.num_streaming_sessions = self._streaming_session_count()
