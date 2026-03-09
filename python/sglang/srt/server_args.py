@@ -424,6 +424,7 @@ class ServerArgs:
     file_storage_path: str = "sglang_storage"
     enable_cache_report: bool = False
     reasoning_parser: Optional[str] = None
+    enable_thinking: Optional[bool] = None
     tool_call_parser: Optional[str] = None
     tool_server: Optional[str] = None
     sampling_defaults: str = "model"
@@ -3150,6 +3151,14 @@ class ServerArgs:
                     self.preferred_sampling_params
                 )
 
+        # Validate enable_thinking flag
+        if self.enable_thinking is not None and self.reasoning_parser is None:
+            logger.warning(
+                "--enable-thinking/--disable-thinking has no effect without "
+                "--reasoning-parser. Please specify a reasoning parser "
+                "(e.g., --reasoning-parser qwen3)."
+            )
+
     def _handle_debug_utils(self):
         if is_in_ci() and self.soft_watchdog_timeout is None:
             logger.info("Set soft_watchdog_timeout since in CI")
@@ -3999,6 +4008,24 @@ class ServerArgs:
             choices=list(ReasoningParser.DetectorMap.keys()),
             default=ServerArgs.reasoning_parser,
             help=f"Specify the parser for reasoning models, supported parsers are: {list(ReasoningParser.DetectorMap.keys())}.",
+        )
+        thinking_group = parser.add_mutually_exclusive_group()
+        thinking_group.add_argument(
+            "--enable-thinking",
+            action="store_true",
+            default=None,
+            dest="enable_thinking",
+            help="Enable thinking/reasoning mode by default for all requests. "
+            "Models like Qwen3 will generate <think>...</think> reasoning content. "
+            "Per-request chat_template_kwargs can override this default.",
+        )
+        thinking_group.add_argument(
+            "--disable-thinking",
+            action="store_false",
+            dest="enable_thinking",
+            help="Disable thinking/reasoning mode by default for all requests. "
+            "Models like Qwen3 will skip reasoning and respond directly. "
+            "Per-request chat_template_kwargs can override this default.",
         )
         tool_call_parser_choices = list(FunctionCallParser.ToolCallParserEnum.keys())
         parser.add_argument(

@@ -99,6 +99,7 @@ class OpenAIServingChat(OpenAIServingBase):
         self.template_manager = template_manager
         self.tool_call_parser = self.tokenizer_manager.server_args.tool_call_parser
         self.reasoning_parser = self.tokenizer_manager.server_args.reasoning_parser
+        self.enable_thinking = self.tokenizer_manager.server_args.enable_thinking
 
         # Get default sampling parameters from model's generation config
         self.default_sampling_params = (
@@ -238,11 +239,42 @@ class OpenAIServingChat(OpenAIServingBase):
 
         return None
 
+    def _get_thinking_template_key(self) -> Optional[str]:
+        """Return the chat_template_kwargs key that controls thinking for the
+        current reasoning_parser, or ``None`` when the parser is unknown /
+        does not support toggling."""
+        if self.reasoning_parser in ("qwen3", "glm45", "nemotron_3", "interns1"):
+            return "enable_thinking"
+        if self.reasoning_parser in ("deepseek-v3", "kimi_k2"):
+            return "thinking"
+        return None
+
+    def _apply_thinking_default(self, request: ChatCompletionRequest) -> None:
+        """Inject the server-level ``--enable-thinking`` / ``--disable-thinking``
+        default into the request's ``chat_template_kwargs`` when the request
+        does not already carry an explicit per-request override."""
+        if self.enable_thinking is None:
+            return  # server did not set a default
+
+        key = self._get_thinking_template_key()
+        if key is None:
+            return  # reasoning parser doesn't support toggling
+
+        ctk = request.chat_template_kwargs
+        if ctk is not None and key in ctk:
+            return  # per-request value takes precedence
+
+        if ctk is None:
+            ctk = {}
+        ctk[key] = self.enable_thinking
+        request.chat_template_kwargs = ctk
+
     def _convert_to_internal_request(
         self,
         request: ChatCompletionRequest,
         raw_request: Request = None,
     ) -> tuple[GenerateReqInput, ChatCompletionRequest]:
+        """Convert OpenAI chat completion request to internal format"""
         reasoning_effort = (
             request.chat_template_kwargs.pop("reasoning_effort", None)
             if request.chat_template_kwargs
@@ -251,7 +283,8 @@ class OpenAIServingChat(OpenAIServingBase):
         if reasoning_effort is not None:
             request.reasoning_effort = reasoning_effort
 
-        """Convert OpenAI chat completion request to internal format"""
+        # Apply server-level thinking default before template rendering
+        self._apply_thinking_default(request)
         is_multimodal = self.tokenizer_manager.model_config.is_multimodal
 
         # Process messages and apply chat template
