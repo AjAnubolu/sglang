@@ -22,7 +22,11 @@ from sglang.srt.managers.schedule_batch import (
     MultimodalDataItem,
     MultimodalInputs,
 )
-from sglang.srt.mem_cache.multimodal_cache import EmbeddingResult, MultiModalStaticCache
+from sglang.srt.mem_cache.multimodal_cache import (
+    EmbeddingResult,
+    EncoderCacheManager,
+    MultiModalStaticCache,
+)
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 from sglang.srt.multimodal.evs import EVSEmbeddingResult
 from sglang.srt.server_args import get_global_server_args
@@ -373,11 +377,46 @@ class MultiModalityDataPaddingPatternMultimodalTokens(MultiModalityDataPaddingPa
 
 
 embedding_cache: Optional[MultiModalStaticCache] = None
+encoder_cache_manager: Optional[EncoderCacheManager] = None
 
 
 def init_mm_embedding_cache(max_size: int = 0):
     global embedding_cache
     embedding_cache = MultiModalStaticCache(max_size)
+
+
+def init_encoder_cache_manager(
+    max_size_bytes: int,
+    max_entry_count: Optional[int] = None,
+    max_encoder_tokens: Optional[int] = None,
+) -> EncoderCacheManager:
+    """Initialize the global encoder cache manager.
+
+    Called by the scheduler during startup.  The encoder cache manager
+    provides reference-counted, scheduler-driven caching of encoder outputs
+    (vision features / multimodal embeddings) so that repeated encoder
+    computations for the same input can be skipped.
+
+    Args:
+        max_size_bytes: Maximum total bytes for cached encoder outputs.
+        max_entry_count: Optional cap on the number of cached entries.
+        max_encoder_tokens: Optional cap on total encoder output tokens.
+
+    Returns:
+        The initialized ``EncoderCacheManager`` instance.
+    """
+    global encoder_cache_manager
+    encoder_cache_manager = EncoderCacheManager(
+        max_size_bytes=max_size_bytes,
+        max_entry_count=max_entry_count,
+        max_encoder_tokens=max_encoder_tokens,
+    )
+    return encoder_cache_manager
+
+
+def get_encoder_cache_manager() -> Optional[EncoderCacheManager]:
+    """Return the global encoder cache manager, or ``None`` if not initialized."""
+    return encoder_cache_manager
 
 
 def get_embedding_chunk(
@@ -572,7 +611,18 @@ def _get_chunked_prefill_embedding(
             continue
         item_hashes = [item.hash for item in embedding_items_per_req]
         embedding_items_hash = MultiModalStaticCache.combine_hashes(item_hashes)
-        embedding_per_req = embedding_cache.get(item_hashes)
+
+        # Try encoder cache manager first (ref-counted, scheduler-driven)
+        _ecm = encoder_cache_manager
+        ecm_tensor = None
+        if _ecm is not None and embedding_items_hash is not None:
+            ecm_tensor = _ecm.acquire(embedding_items_hash)
+
+        if ecm_tensor is not None:
+            embedding_per_req = EmbeddingResult(embedding=ecm_tensor)
+        else:
+            embedding_per_req = embedding_cache.get(item_hashes)
+
         if embedding_per_req is None:
             embedding = data_embedding_func(embedding_items_per_req)
             embedding_per_req = (
@@ -587,6 +637,15 @@ def _get_chunked_prefill_embedding(
                     "`SGLANG_VLM_CACHE_SIZE_MB` environment variable or reducing the input "
                     "embedding size."
                 )
+            # Also store in encoder cache manager for ref-counted management
+            if (
+                _ecm is not None
+                and embedding_items_hash is not None
+                and isinstance(embedding_per_req, EmbeddingResult)
+            ):
+                num_tokens = embedding_per_req.embedding.shape[0]
+                _ecm.put(embedding_items_hash, embedding_per_req.embedding, num_tokens)
+                _ecm.acquire(embedding_items_hash)
 
         extend_prefix_len = prefix_length[i]
         extend_seq_len = extend_length[i] if i < len(extend_length) else 0
@@ -781,7 +840,17 @@ def _get_chunked_prefill_embedding_for_chunked_items(
         item_hashes = [item.hash for item in embedding_items_per_chunk]
         embedding_items_hash = MultiModalStaticCache.combine_hashes(item_hashes)
 
-        embedding_per_chunk = embedding_cache.get(embedding_items_hash)
+        # Try encoder cache manager first (ref-counted, scheduler-driven)
+        _ecm = encoder_cache_manager
+        ecm_tensor = None
+        if _ecm is not None and embedding_items_hash is not None:
+            ecm_tensor = _ecm.acquire(embedding_items_hash)
+
+        if ecm_tensor is not None:
+            embedding_per_chunk = ecm_tensor
+        else:
+            embedding_per_chunk = embedding_cache.get(embedding_items_hash)
+
         if embedding_per_chunk is None:
             # ViT forward for items related with per chunk
             embedding_per_chunk = data_embedding_func(embedding_items_per_chunk)
@@ -793,6 +862,15 @@ def _get_chunked_prefill_embedding_for_chunked_items(
                     "Consider increasing `SGLANG_VLM_CACHE_SIZE_MB` or reducing "
                     "video frame count / resolution for a single request."
                 )
+            # Also store in encoder cache manager for ref-counted management
+            if _ecm is not None and embedding_items_hash is not None:
+                num_tokens = embedding_per_chunk.shape[0]
+                _ecm.put(
+                    embedding_items_hash,
+                    embedding_for_cache,
+                    num_tokens,
+                )
+                _ecm.acquire(embedding_items_hash)
         else:
             target_device = embedding_items_per_req[0].feature.device
             if embedding_per_chunk.device != target_device:

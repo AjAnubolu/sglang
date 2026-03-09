@@ -136,7 +136,11 @@ from sglang.srt.managers.io_struct import (
     UpdateWeightsFromIPCReqInput,
     UpdateWeightsFromTensorReqInput,
 )
-from sglang.srt.managers.mm_utils import init_mm_embedding_cache, unwrap_shm_features
+from sglang.srt.managers.mm_utils import (
+    init_encoder_cache_manager,
+    init_mm_embedding_cache,
+    unwrap_shm_features,
+)
 from sglang.srt.managers.overlap_utils import FutureMap
 from sglang.srt.managers.prefill_delayer import (
     PrefillDelayer,
@@ -782,6 +786,13 @@ class Scheduler(
 
         embedding_cache_size = envs.SGLANG_VLM_CACHE_SIZE_MB.get()
         init_mm_embedding_cache(embedding_cache_size * 1024 * 1024)
+
+        # Initialize encoder cache manager for scheduler-driven, ref-counted
+        # caching of encoder outputs (vision features / multimodal embeddings).
+        encoder_cache_size = envs.SGLANG_VLM_CACHE_SIZE_MB.get()
+        self.encoder_cache_manager = init_encoder_cache_manager(
+            max_size_bytes=encoder_cache_size * 1024 * 1024,
+        )
 
     def init_running_status(self):
         self.waiting_queue: List[Req] = []
@@ -1603,6 +1614,13 @@ class Scheduler(
             # For session requests, keep mm_inputs for the next request
             if req.session:
                 continue
+
+            # Release encoder cache references for finished requests
+            if self.encoder_cache_manager is not None:
+                for item in mm_inputs.mm_items:
+                    if item.hash is not None:
+                        self.encoder_cache_manager.release(item.hash)
+
             # For non-session requests, clear features and mm_inputs
             for item in mm_inputs.mm_items:
                 item.feature = None
