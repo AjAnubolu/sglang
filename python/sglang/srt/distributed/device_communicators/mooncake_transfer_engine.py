@@ -1,7 +1,7 @@
-import ast
 import json
 import logging
 import os
+import re
 from typing import List, Optional
 
 from sglang.srt.environ import envs
@@ -19,9 +19,8 @@ def get_ib_devices_for_gpu(ib_device_str: Optional[str], gpu_id: int) -> Optiona
 
     Supports all the following formats:
     1. Old format: "ib0, ib1, ib2"
-    2. New format (JSON): {"0": "ib0, ib1", "1": "ib2, ib3", "2": "ib4"}
-    3. New format (Python dict): {0: "ib0, ib1", 1: "ib2, ib3", 2: "ib4"}
-    4. JSON file: path to a JSON file containing the mapping
+    2. New format: {"0": "ib0, ib1", "1": "ib2, ib3"} (also accepts bare integer keys)
+    3. JSON file: path to a JSON file containing the mapping
 
     Args:
         ib_device_str: The original IB device string or path to JSON file
@@ -49,17 +48,18 @@ def get_ib_devices_for_gpu(ib_device_str: Optional[str], gpu_id: int) -> Optiona
             # File reading failed, raise exception
             raise RuntimeError(f"Failed to read JSON file {ib_device_str}: {e}") from e
 
-    # Try to parse as a dict mapping (JSON or Python dict syntax)
+    # Try to parse as JSON dict mapping
     parsed_dict = None
     try:
         parsed_dict = json.loads(ib_device_str)
     except json.JSONDecodeError:
-        # JSON failed; try Python dict syntax (e.g., {0: "ib0, ib1"})
-        # which uses integer keys that are invalid in JSON
         if not is_json_file:
+            # Try converting bare integer keys to quoted strings so JSON can parse it
+            # e.g., {0: "ib0", 1: "ib1"} -> {"0": "ib0", "1": "ib1"}
             try:
-                parsed_dict = ast.literal_eval(ib_device_str)
-            except (ValueError, SyntaxError):
+                quoted = re.sub(r"(?<=[\{,])\s*(\d+)\s*:", r' "\1":', ib_device_str)
+                parsed_dict = json.loads(quoted)
+            except (json.JSONDecodeError, TypeError):
                 pass
 
     if isinstance(parsed_dict, dict):
