@@ -286,6 +286,7 @@ class SchedulerMetricsMixin:
             self.stats.num_running_reqs_offline_batch = 0
             self.stats.num_used_tokens = num_used
             self.stats.token_usage = token_usage
+            self.stats.gpu_cache_usage_perc = token_usage
             self.stats.full_token_usage = full_token_usage
             if self.is_hybrid_swa:
                 self.stats.swa_token_usage = swa_token_usage
@@ -466,6 +467,7 @@ class SchedulerMetricsMixin:
             self.stats.num_used_tokens = num_used
             # maximum usage of all pools
             self.stats.token_usage = token_usage
+            self.stats.gpu_cache_usage_perc = token_usage
             # usage of full attention
             self.stats.full_token_usage = full_token_usage
             if self.is_hybrid_swa:

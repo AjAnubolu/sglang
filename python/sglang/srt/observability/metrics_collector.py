@@ -92,6 +92,7 @@ class SchedulerStats:
     cache_hit_rate: float = 0.0
 
     max_total_num_tokens: int = 0
+    gpu_cache_usage_perc: float = 0.0
 
     # Speculative decoding
     spec_accept_length: float = 0.0
@@ -267,6 +268,14 @@ class SchedulerMetricsCollector:
         self.max_total_num_tokens = Gauge(
             name="sglang:max_total_num_tokens",
             documentation="Maximum total number of tokens in the KV cache pool.",
+            labelnames=labels.keys(),
+            multiprocess_mode="mostrecent",
+        )
+
+        # KV cache usage percentage (vLLM-compatible metric name)
+        self.gpu_cache_usage_perc = Gauge(
+            name="sglang:gpu_cache_usage_perc",
+            documentation="GPU KV cache usage percentage (0.0 to 1.0).",
             labelnames=labels.keys(),
             multiprocess_mode="mostrecent",
         )
@@ -948,6 +957,7 @@ class SchedulerMetricsCollector:
         self._log_gauge(self.cache_hit_rate, stats.cache_hit_rate)
 
         self._log_gauge(self.max_total_num_tokens, stats.max_total_num_tokens)
+        self._log_gauge(self.gpu_cache_usage_perc, stats.gpu_cache_usage_perc)
 
         # Speculative decoding
         self._log_gauge(self.spec_accept_length, stats.spec_accept_length)
