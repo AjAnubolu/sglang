@@ -295,13 +295,13 @@ class TestConfigurationValidation:
         args = RouterArgs(
             service_discovery=True,
             selector={"app": "worker", "env": "prod"},
-            service_discovery_port=8080,
+            service_discovery_port=[8080],
             service_discovery_namespace="default",
         )
 
         assert args.service_discovery is True
         assert args.selector == {"app": "worker", "env": "prod"}
-        assert args.service_discovery_port == 8080
+        assert args.service_discovery_port == [8080]
         assert args.service_discovery_namespace == "default"
 
     def test_pd_service_discovery_validation(self):
@@ -495,7 +495,7 @@ class TestLaunchValidation:
         args = RouterArgs(
             service_discovery=True,
             selector={"app": "worker"},
-            service_discovery_port=8080,
+            service_discovery_port=[8080],
         )
 
         # Should not raise validation error

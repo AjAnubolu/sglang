@@ -321,12 +321,22 @@ impl ConfigValidator {
             return Ok(());
         }
 
-        if discovery.port == 0 {
+        if discovery.ports.is_empty() {
             return Err(ConfigError::InvalidValue {
-                field: "discovery.port".to_string(),
-                value: discovery.port.to_string(),
-                reason: "Port must be > 0".to_string(),
+                field: "discovery.ports".to_string(),
+                value: "[]".to_string(),
+                reason: "At least one port must be specified".to_string(),
             });
+        }
+
+        for port in &discovery.ports {
+            if *port == 0 {
+                return Err(ConfigError::InvalidValue {
+                    field: "discovery.ports".to_string(),
+                    value: port.to_string(),
+                    reason: "Port must be > 0".to_string(),
+                });
+            }
         }
 
         if discovery.check_interval_secs == 0 {

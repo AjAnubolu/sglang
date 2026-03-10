@@ -231,13 +231,16 @@ struct CliArgs {
     #[arg(long, num_args = 0.., help_heading = "Service Discovery (Kubernetes)")]
     selector: Vec<String>,
 
-    /// Port to use for discovered worker pods
+    /// Ports to use for discovered worker pods. Multiple ports can be specified
+    /// to discover workers on different ports from the same pod.
+    /// Example: --service-discovery-port 12121 12122
     #[arg(
         long,
-        default_value_t = 80,
+        num_args = 1..,
+        default_values_t = vec![80],
         help_heading = "Service Discovery (Kubernetes)"
     )]
-    service_discovery_port: u16,
+    service_discovery_port: Vec<u16>,
 
     /// Kubernetes namespace to watch for pods
     #[arg(long, help_heading = "Service Discovery (Kubernetes)")]
@@ -893,7 +896,7 @@ impl CliArgs {
             Some(DiscoveryConfig {
                 enabled: true,
                 namespace: self.service_discovery_namespace.clone(),
-                port: self.service_discovery_port,
+                ports: self.service_discovery_port.clone(),
                 check_interval_secs: 60,
                 selector: Self::parse_selector(&self.selector),
                 prefill_selector: Self::parse_selector(&self.prefill_selector),
@@ -1051,7 +1054,7 @@ impl CliArgs {
                 enabled: true,
                 selector: Self::parse_selector(&self.selector),
                 check_interval: std::time::Duration::from_secs(60),
-                port: self.service_discovery_port,
+                ports: self.service_discovery_port.clone(),
                 namespace: self.service_discovery_namespace.clone(),
                 pd_mode: self.pd_disaggregation,
                 prefill_selector: Self::parse_selector(&self.prefill_selector),

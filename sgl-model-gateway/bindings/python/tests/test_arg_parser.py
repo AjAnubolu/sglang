@@ -35,7 +35,7 @@ class TestRouterArgs:
         # Test service discovery defaults
         assert args.service_discovery is False
         assert args.selector == {}
-        assert args.service_discovery_port == 80
+        assert args.service_discovery_port == [80]
         assert args.service_discovery_namespace is None
 
         # Test retry and circuit breaker defaults
@@ -162,7 +162,7 @@ class TestRouterArgs:
             router_log_level="debug",
             router_service_discovery=True,
             router_selector=["app=worker", "env=test"],
-            router_service_discovery_port=8080,
+            router_service_discovery_port=[8080],
             router_service_discovery_namespace="default",
             router_prefill_selector=["app=prefill"],
             router_decode_selector=["app=decode"],
@@ -209,7 +209,7 @@ class TestRouterArgs:
         # Test service discovery
         assert router_args.service_discovery is True
         assert router_args.selector == {"app": "worker", "env": "test"}
-        assert router_args.service_discovery_port == 8080
+        assert router_args.service_discovery_port == [8080]
         assert router_args.service_discovery_namespace == "default"
         assert router_args.prefill_selector == {"app": "prefill"}
         assert router_args.decode_selector == {"app": "decode"}
@@ -289,7 +289,7 @@ class TestRouterArgs:
             router_log_level=None,
             router_service_discovery=False,
             router_selector=None,
-            router_service_discovery_port=80,
+            router_service_discovery_port=[80],
             router_service_discovery_namespace=None,
             router_prefill_selector=None,
             router_decode_selector=None,
@@ -359,7 +359,7 @@ class TestRouterArgs:
             log_level=None,
             service_discovery=False,
             selector=None,
-            service_discovery_port=80,
+            service_discovery_port=[80],
             service_discovery_namespace=None,
             prefill_selector=None,
             decode_selector=None,
@@ -502,8 +502,26 @@ class TestParseRouterArgs:
 
             assert router_args.service_discovery is True
             assert router_args.selector == {"app": "worker", "env": "prod"}
-            assert router_args.service_discovery_port == 8080
+            assert router_args.service_discovery_port == [8080]
             assert router_args.service_discovery_namespace == "default"
+
+    def test_parse_service_discovery_multiple_ports(self):
+        """Test parsing service discovery with multiple ports."""
+        args = [
+            "--service-discovery",
+            "--selector",
+            "app=worker",
+            "--service-discovery-port",
+            "12121",
+            "12122",
+            "--service-discovery-namespace",
+            "default",
+        ]
+        router_args = parse_router_args(args)
+
+        assert router_args.service_discovery is True
+        assert router_args.service_discovery_port == [12121, 12122]
+        assert router_args.service_discovery_namespace == "default"
 
     def test_parse_retry_and_circuit_breaker_args(self):
         """Test parsing retry and circuit breaker arguments."""

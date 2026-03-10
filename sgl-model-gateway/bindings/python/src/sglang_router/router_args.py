@@ -49,7 +49,7 @@ class RouterArgs:
     # Service discovery configuration
     service_discovery: bool = False
     selector: Dict[str, str] = dataclasses.field(default_factory=dict)
-    service_discovery_port: int = 80
+    service_discovery_port: List[int] = dataclasses.field(default_factory=lambda: [80])
     service_discovery_namespace: Optional[str] = None
     # PD service discovery configuration
     prefill_selector: Dict[str, str] = dataclasses.field(default_factory=dict)
@@ -436,8 +436,11 @@ class RouterArgs:
         k8s_group.add_argument(
             f"--{prefix}service-discovery-port",
             type=int,
-            default=RouterArgs.service_discovery_port,
-            help="Port to use for discovered worker pods",
+            nargs="+",
+            default=[80],
+            help="Ports to use for discovered worker pods. Multiple ports can be specified "
+            "to discover workers on different ports from the same pod. "
+            "Example: --service-discovery-port 12121 12122",
         )
         k8s_group.add_argument(
             f"--{prefix}service-discovery-namespace",

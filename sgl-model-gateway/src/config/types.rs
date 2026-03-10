@@ -330,7 +330,15 @@ pub struct DiscoveryConfig {
     pub enabled: bool,
     /// None = all namespaces
     pub namespace: Option<String>,
-    pub port: u16,
+    /// Ports to use for discovered worker pods. Each discovered pod will have
+    /// one worker URL generated per port. Supports backward compatibility:
+    /// a single `port` value in config is deserialized into a one-element `ports` vec.
+    #[serde(
+        default = "default_discovery_ports",
+        deserialize_with = "deserialize_ports",
+        alias = "port"
+    )]
+    pub ports: Vec<u16>,
     pub check_interval_secs: u64,
     /// Regular mode
     pub selector: HashMap<String, String>,
@@ -347,6 +355,62 @@ pub struct DiscoveryConfig {
     pub router_mesh_port_annotation: String,
 }
 
+fn default_discovery_ports() -> Vec<u16> {
+    vec![8000]
+}
+
+/// Custom deserializer that accepts either a single port number or a list of ports.
+/// This provides backward compatibility: `"port": 8080` works the same as `"ports": [8080]`.
+fn deserialize_ports<'de, D>(deserializer: D) -> Result<Vec<u16>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de;
+
+    struct PortsVisitor;
+
+    impl<'de> de::Visitor<'de> for PortsVisitor {
+        type Value = Vec<u16>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a port number or a list of port numbers")
+        }
+
+        fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            if value > u16::MAX as u64 {
+                return Err(de::Error::custom(format!("port {} out of range", value)));
+            }
+            Ok(vec![value as u16])
+        }
+
+        fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            if value < 0 || value > u16::MAX as i64 {
+                return Err(de::Error::custom(format!("port {} out of range", value)));
+            }
+            Ok(vec![value as u16])
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: de::SeqAccess<'de>,
+        {
+            let mut ports = Vec::new();
+            while let Some(port) = seq.next_element::<u16>()? {
+                ports.push(port);
+            }
+            Ok(ports)
+        }
+    }
+
+    deserializer.deserialize_any(PortsVisitor)
+}
+
 fn default_router_mesh_port_annotation() -> String {
     "sglang.ai/mesh-port".to_string()
 }
@@ -356,7 +420,7 @@ impl Default for DiscoveryConfig {
         Self {
             enabled: false,
             namespace: None,
-            port: 8000,
+            ports: default_discovery_ports(),
             check_interval_secs: 120,
             selector: HashMap::new(),
             prefill_selector: HashMap::new(),
@@ -849,7 +913,7 @@ mod tests {
 
         assert!(!config.enabled);
         assert!(config.namespace.is_none());
-        assert_eq!(config.port, 8000);
+        assert_eq!(config.ports, vec![8000]);
         assert_eq!(config.check_interval_secs, 120);
         assert!(config.selector.is_empty());
         assert!(config.prefill_selector.is_empty());
@@ -866,7 +930,7 @@ mod tests {
         let config = DiscoveryConfig {
             enabled: true,
             namespace: Some("default".to_string()),
-            port: 9000,
+            ports: vec![9000],
             check_interval_secs: 30,
             selector: selector.clone(),
             prefill_selector: selector.clone(),
@@ -878,9 +942,20 @@ mod tests {
 
         assert!(config.enabled);
         assert_eq!(config.namespace, Some("default".to_string()));
-        assert_eq!(config.port, 9000);
+        assert_eq!(config.ports, vec![9000]);
         assert_eq!(config.selector.len(), 2);
         assert_eq!(config.selector.get("app"), Some(&"sglang".to_string()));
+    }
+
+    #[test]
+    fn test_discovery_config_with_multiple_ports() {
+        let config = DiscoveryConfig {
+            enabled: true,
+            ports: vec![12121, 12122],
+            ..Default::default()
+        };
+
+        assert_eq!(config.ports, vec![12121, 12122]);
     }
 
     #[test]
@@ -1107,7 +1182,7 @@ mod tests {
             .discovery_config(DiscoveryConfig {
                 enabled: true,
                 namespace: None,
-                port: 8080,
+                ports: vec![8080],
                 check_interval_secs: 45,
                 selector,
                 ..Default::default()
@@ -1144,7 +1219,7 @@ mod tests {
             .discovery_config(DiscoveryConfig {
                 enabled: true,
                 namespace: Some("production".to_string()),
-                port: 8443,
+                ports: vec![8443],
                 check_interval_secs: 120,
                 selector: selectors.clone(),
                 prefill_selector: selectors.clone(),

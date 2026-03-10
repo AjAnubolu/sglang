@@ -183,7 +183,7 @@ class TestRouterInitialization:
         args = RouterArgs(
             service_discovery=True,
             selector={"app": "worker", "env": "prod"},
-            service_discovery_port=8080,
+            service_discovery_port=[8080],
             service_discovery_namespace="default",
         )
 
@@ -210,7 +210,7 @@ class TestRouterInitialization:
             router_mod.from_args.assert_called_once()
             assert captured_args["service_discovery"] is True
             assert captured_args["selector"] == {"app": "worker", "env": "prod"}
-            assert captured_args["service_discovery_port"] == 8080
+            assert captured_args["service_discovery_port"] == [8080]
             assert captured_args["service_discovery_namespace"] == "default"
 
             # Verify router.start() was called
@@ -933,7 +933,7 @@ class TestStartupFlow:
             policy="round_robin",
             service_discovery=True,
             selector={"app": "worker"},
-            service_discovery_port=8080,
+            service_discovery_port=[8080],
             service_discovery_namespace="default",
             dp_aware=True,
             api_key="test-key",
@@ -1025,7 +1025,7 @@ class TestStartupFlow:
             assert captured_args["policy"] == PolicyType.RoundRobin
             assert captured_args["service_discovery"] is True
             assert captured_args["selector"] == {"app": "worker"}
-            assert captured_args["service_discovery_port"] == 8080
+            assert captured_args["service_discovery_port"] == [8080]
             assert captured_args["service_discovery_namespace"] == "default"
             assert captured_args["dp_aware"] is True
             assert captured_args["api_key"] == "test-key"

@@ -213,13 +213,22 @@ class TestRouterConfigValidation:
         args = RouterArgs(
             service_discovery=True,
             selector={"app": "worker", "env": "prod"},
-            service_discovery_port=8080,
+            service_discovery_port=[8080],
             service_discovery_namespace="default",
         )
         assert args.service_discovery is True
         assert args.selector == {"app": "worker", "env": "prod"}
-        assert args.service_discovery_port == 8080
+        assert args.service_discovery_port == [8080]
         assert args.service_discovery_namespace == "default"
+
+    def test_service_discovery_config_multiple_ports(self):
+        """Test service discovery configuration with multiple ports."""
+        args = RouterArgs(
+            service_discovery=True,
+            selector={"app": "worker"},
+            service_discovery_port=[12121, 12122],
+        )
+        assert args.service_discovery_port == [12121, 12122]
 
     def test_pd_service_discovery_config_validation(self):
         """Test PD service discovery configuration validation."""
