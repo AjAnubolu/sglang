@@ -47,10 +47,10 @@ ScalarType, scalar_types = get_scalar_types()
 def _ignored_layer_matches(prefix: str, ignored: str) -> bool:
     """Check if a layer prefix matches an ignored-layer pattern.
 
-    Supports glob wildcards (*) via fnmatch when the pattern contains '*',
-    otherwise falls back to the original substring semantics.
+    Supports glob wildcards (*, ?, [) via fnmatch when the pattern contains
+    glob characters, otherwise falls back to the original substring semantics.
     """
-    if "*" in ignored:
+    if any(c in ignored for c in "*?["):
         return fnmatchcase(prefix, ignored)
     return ignored in prefix
 
