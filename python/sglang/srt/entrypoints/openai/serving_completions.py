@@ -393,10 +393,16 @@ class OpenAIServingCompletion(OpenAIServingBase):
                 isinstance(self.tokenizer_manager.server_args, ServerArgs)
                 and self.tokenizer_manager.server_args.enable_debug_error_responses
             ):
-                error = self.create_streaming_error_response(str(e))
+                error = self.create_streaming_error_response(
+                    str(e),
+                    err_type="InternalServerError",
+                    status_code=500,
+                )
             else:
                 error = self.create_streaming_error_response(
-                    f"Internal server error. Please contact the administrator. Error ID: {error_id}"
+                    f"Internal server error. Please contact the administrator. Error ID: {error_id}",
+                    err_type="InternalServerError",
+                    status_code=500,
                 )
             yield f"data: {error}\n\n"
 
