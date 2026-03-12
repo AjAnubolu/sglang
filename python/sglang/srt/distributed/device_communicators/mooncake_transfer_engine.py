@@ -13,14 +13,55 @@ logger = logging.getLogger(__name__)
 _mooncake_transfer_engine: Optional["MooncakeTransferEngine"] = None
 
 
+def _normalize_to_json(s: str) -> str:
+    """Convert a Python dict-style string to valid JSON.
+
+    Handles two common deviations from JSON that appear in user-supplied config:
+    1. Single-quoted strings: {'0': 'ib0'} -> {"0": "ib0"}
+    2. Bare integer keys:     {0: "ib0"}   -> {"0": "ib0"}
+
+    The function only touches quote characters and bare-integer keys; it does
+    not evaluate or execute the string in any way.
+    """
+    # Replace single quotes with double quotes.
+    # We handle escaped single quotes (\\') inside single-quoted strings by
+    # matching the full token: either a single-quoted string or any other char.
+    result: list[str] = []
+    i = 0
+    while i < len(s):
+        if s[i] == "'":
+            # Scan for the closing single quote, handling escaped quotes
+            j = i + 1
+            while j < len(s) and s[j] != "'":
+                if s[j] == "\\":
+                    j += 1  # skip escaped character
+                j += 1
+            # s[i:j+1] is the single-quoted token including quotes
+            inner = s[i + 1 : j]
+            # Escape any double quotes that appear inside the value
+            inner = inner.replace('"', '\\"')
+            result.append('"' + inner + '"')
+            i = j + 1
+        else:
+            result.append(s[i])
+            i += 1
+    s = "".join(result)
+
+    # Quote bare integer keys: {0: ... , 1: ...} -> {"0": ... , "1": ...}
+    s = re.sub(r"(?<=[\{,])\s*(\d+)\s*:", r' "\1":', s)
+
+    return s
+
+
 def get_ib_devices_for_gpu(ib_device_str: Optional[str], gpu_id: int) -> Optional[str]:
     """
     Parse IB device string and get IB devices for a specific GPU ID.
 
     Supports all the following formats:
     1. Old format: "ib0, ib1, ib2"
-    2. New format: {"0": "ib0, ib1", "1": "ib2, ib3"} (also accepts bare integer keys)
-    3. JSON file: path to a JSON file containing the mapping
+    2. JSON dict:  {"0": "ib0, ib1", "1": "ib2, ib3"}
+       Also tolerates Python dict syntax (single quotes, bare int keys).
+    3. JSON file:  path to a .json file containing the mapping
 
     Args:
         ib_device_str: The original IB device string or path to JSON file
@@ -54,11 +95,12 @@ def get_ib_devices_for_gpu(ib_device_str: Optional[str], gpu_id: int) -> Optiona
         parsed_dict = json.loads(ib_device_str)
     except json.JSONDecodeError:
         if not is_json_file:
-            # Try converting bare integer keys to quoted strings so JSON can parse it
-            # e.g., {0: "ib0", 1: "ib1"} -> {"0": "ib0", "1": "ib1"}
+            # Input may be a Python dict literal (single quotes or bare int keys).
+            # Normalize to valid JSON and retry.
+            # e.g. {0: 'ib0', 1: 'ib1'} -> {"0": "ib0", "1": "ib1"}
             try:
-                quoted = re.sub(r"(?<=[\{,])\s*(\d+)\s*:", r' "\1":', ib_device_str)
-                parsed_dict = json.loads(quoted)
+                normalized = _normalize_to_json(ib_device_str)
+                parsed_dict = json.loads(normalized)
             except (json.JSONDecodeError, TypeError):
                 pass
 
@@ -93,8 +135,9 @@ def get_ib_devices_for_gpu(ib_device_str: Optional[str], gpu_id: int) -> Optiona
             )
 
     if is_json_file:
-        # It was supposed to be a JSON file but failed to parse
-        raise RuntimeError(f"Failed to parse JSON content from file {ib_device_str}")
+        # The file contents were neither valid JSON nor a fixable Python dict
+        # literal, so we cannot silently fall through to the old flat format.
+        raise RuntimeError(f"Failed to parse JSON content from file: {ib_device_str}")
 
     # Not a dict format, treat as old format - return same devices for all GPUs
     return ib_device_str
