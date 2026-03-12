@@ -1221,6 +1221,10 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3VLForConditionalGeneration):
 
         self.deepstack_visual_indexes = self.visual.deepstack_visual_indexes
 
+    @property
+    def routed_experts_weights_of_layer(self):
+        return self.model.routed_experts_weights_of_layer
+
     def get_embed_and_head(self):
         embed = self.model.embed_tokens.weight if self.pp_group.is_first_rank else None
         head = self.lm_head.weight if self.pp_group.is_last_rank else None
