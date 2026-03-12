@@ -141,6 +141,7 @@ from sglang.srt.managers.mm_utils import (
     init_mm_embedding_cache,
     unwrap_shm_features,
 )
+from sglang.srt.mem_cache.multimodal_cache import MultiModalStaticCache
 from sglang.srt.managers.overlap_utils import FutureMap
 from sglang.srt.managers.prefill_delayer import (
     PrefillDelayer,
@@ -1617,9 +1618,12 @@ class Scheduler(
 
             # Release encoder cache references for finished requests
             if self.encoder_cache_manager is not None:
-                for item in mm_inputs.mm_items:
-                    if item.hash is not None:
-                        self.encoder_cache_manager.release(item.hash)
+                item_hashes = [
+                    item.hash for item in mm_inputs.mm_items if item.hash is not None
+                ]
+                combined = MultiModalStaticCache.combine_hashes(item_hashes)
+                if combined is not None:
+                    self.encoder_cache_manager.release(combined)
 
             # For non-session requests, clear features and mm_inputs
             for item in mm_inputs.mm_items:
