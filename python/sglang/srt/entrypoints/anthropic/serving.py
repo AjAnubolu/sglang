@@ -271,17 +271,20 @@ class AnthropicServing:
 
         # Wire thinking parameter
         if anthropic_request.thinking is not None:
-            if anthropic_request.thinking.type == "enabled":
-                chat_request.separate_reasoning = True
+            # Pick the correct kwarg key based on the model's reasoning parser
+            reasoning_parser = self.openai_serving_chat.reasoning_parser
+            if reasoning_parser in ("deepseek-v3", "kimi_k2"):
+                thinking_key = "thinking"
+            else:
+                thinking_key = "enable_thinking"
+
+            enabled = anthropic_request.thinking.type == "enabled"
+            chat_request.separate_reasoning = enabled
+            if enabled:
                 chat_request.stream_reasoning = True
-                if chat_request.chat_template_kwargs is None:
-                    chat_request.chat_template_kwargs = {}
-                chat_request.chat_template_kwargs["enable_thinking"] = True
-            elif anthropic_request.thinking.type == "disabled":
-                chat_request.separate_reasoning = False
-                if chat_request.chat_template_kwargs is None:
-                    chat_request.chat_template_kwargs = {}
-                chat_request.chat_template_kwargs["enable_thinking"] = False
+            if chat_request.chat_template_kwargs is None:
+                chat_request.chat_template_kwargs = {}
+            chat_request.chat_template_kwargs[thinking_key] = enabled
 
         # Convert tools
         if anthropic_request.tools:
