@@ -48,33 +48,33 @@ _is_cuda = is_cuda()
 _is_cpu = is_cpu()
 _use_aiter = get_bool_env_var("SGLANG_USE_AITER") and _is_hip
 
-_has_sgl_kernel = False
+try:
+    import sgl_kernel  # noqa: F401
 
-if _is_cuda:
+    _has_sgl_kernel = True
+except ImportError:
+    _has_sgl_kernel = False
+
+if _is_cuda and _has_sgl_kernel:
+    from sgl_kernel import sgl_per_token_quant_fp8
+
+    from sglang.jit_kernel.per_tensor_quant_fp8 import (
+        per_tensor_quant_fp8 as sgl_per_tensor_quant_fp8,
+    )
+
+    # Temporary
     try:
-        from sgl_kernel import sgl_per_token_quant_fp8
+        from sgl_kernel import sgl_per_token_group_quant_8bit
 
-        from sglang.jit_kernel.per_tensor_quant_fp8 import (
-            per_tensor_quant_fp8 as sgl_per_tensor_quant_fp8,
-        )
-
-        # Temporary
-        try:
-            from sgl_kernel import sgl_per_token_group_quant_8bit
-
-            enable_sgl_per_token_group_quant_8bit = True
-        except ImportError:
-            from sgl_kernel import sgl_per_token_group_quant_fp8
-
-            enable_sgl_per_token_group_quant_8bit = False
-
-        from sglang.jit_kernel.per_token_group_quant_8bit import (
-            per_token_group_quant_8bit as sgl_per_token_group_quant_8bit_jit,
-        )
-
-        _has_sgl_kernel = True
+        enable_sgl_per_token_group_quant_8bit = True
     except ImportError:
-        pass
+        from sgl_kernel import sgl_per_token_group_quant_fp8
+
+        enable_sgl_per_token_group_quant_8bit = False
+
+    from sglang.jit_kernel.per_token_group_quant_8bit import (
+        per_token_group_quant_8bit as sgl_per_token_group_quant_8bit_jit,
+    )
 
 if _is_hip:
     _has_vllm = False
