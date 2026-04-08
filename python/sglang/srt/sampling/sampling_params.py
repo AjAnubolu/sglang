@@ -153,6 +153,11 @@ class SamplingParams:
                         f"stop_token_ids must be a list of integers, got "
                         f"{token_id!r} of type {type(token_id).__name__}."
                     )
+                if not 0 <= token_id < vocab_size:
+                    raise ValueError(
+                        f"stop_token_ids must be in [0, {vocab_size - 1}], got "
+                        f"{token_id}."
+                    )
         if self.logit_bias is not None:
             for token_id in self.logit_bias:
                 if not 0 <= int(token_id) < vocab_size:
