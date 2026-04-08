@@ -1162,8 +1162,12 @@ def _launch_master_watchdog(server_args: ServerArgs) -> None:
     if get_bool_env_var("SGLANG_DISABLE_MASTER_WATCHDOG"):
         return
 
+    addr = server_args.dist_init_addr
+    if "://" in addr:
+        addr = addr.split("://", 1)[1]
+
     try:
-        master_addr = NetworkAddress.parse(server_args.dist_init_addr)
+        master_addr = NetworkAddress.parse(addr)
     except ValueError as e:
         logger.warning(
             "Master watchdog disabled: could not parse dist_init_addr %r: %s",
