@@ -97,6 +97,7 @@ from sglang.srt.utils import (
     set_prometheus_multiproc_dir,
     set_ulimit,
 )
+from sglang.srt.utils.network import NetworkAddress
 from sglang.srt.utils.torch_memory_saver_adapter import TorchMemorySaverAdapter
 from sglang.version import __version__
 
@@ -651,6 +652,8 @@ class Engine(EngineBase):
                 server_args.host, server_args.port, server_args.enable_metrics
             )
 
+            _launch_master_watchdog(server_args)
+
             scheduler_init_result.wait_for_completion()
             return (
                 None,
@@ -1149,6 +1152,73 @@ def _set_envs_and_config(server_args: ServerArgs):
 
     # Set mp start method
     mp.set_start_method("spawn", force=True)
+
+
+def _launch_master_watchdog(server_args: ServerArgs) -> None:
+    if server_args.node_rank == 0 or server_args.nnodes <= 1:
+        return
+    if not server_args.dist_init_addr:
+        return
+    if get_bool_env_var("SGLANG_DISABLE_MASTER_WATCHDOG"):
+        return
+
+    try:
+        master_addr = NetworkAddress.parse(server_args.dist_init_addr)
+    except ValueError as e:
+        logger.warning(
+            "Master watchdog disabled: could not parse dist_init_addr %r: %s",
+            server_args.dist_init_addr,
+            e,
+        )
+        return
+
+    probe_interval_s = float(os.environ.get("SGLANG_MASTER_WATCHDOG_INTERVAL", "10"))
+    failure_threshold = int(
+        os.environ.get("SGLANG_MASTER_WATCHDOG_FAILURE_THRESHOLD", "6")
+    )
+    startup_grace_s = float(
+        os.environ.get("SGLANG_MASTER_WATCHDOG_STARTUP_GRACE", "60")
+    )
+
+    import socket
+
+    def _probe_master() -> bool:
+        try:
+            with socket.create_connection(master_addr.to_bind_tuple(), timeout=5):
+                return True
+        except OSError:
+            return False
+
+    def _watchdog_loop() -> None:
+        time.sleep(startup_grace_s)
+        consecutive_failures = 0
+        while True:
+            if _probe_master():
+                consecutive_failures = 0
+            else:
+                consecutive_failures += 1
+                logger.warning(
+                    "Master watchdog: failed to reach master %s (%d/%d)",
+                    master_addr.to_host_port_str(),
+                    consecutive_failures,
+                    failure_threshold,
+                )
+                if consecutive_failures >= failure_threshold:
+                    logger.error(
+                        "Master watchdog: master %s unreachable; killing worker.",
+                        master_addr.to_host_port_str(),
+                    )
+                    try:
+                        kill_process_tree(os.getpid())
+                    finally:
+                        os._exit(1)
+            time.sleep(probe_interval_s)
+
+    threading.Thread(
+        target=_watchdog_loop,
+        name="sglang-master-watchdog",
+        daemon=True,
+    ).start()
 
 
 def _wait_for_scheduler_ready(
