@@ -1,3 +1,7 @@
+from sglang.test.ci.ci_register import register_cuda_ci
+
+register_cuda_ci(est_time=60, suite="stage-a-test-1")
+
 import os
 import shutil
 import subprocess
