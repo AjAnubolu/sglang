@@ -1,6 +1,6 @@
-from sglang.test.ci.ci_register import register_cuda_ci
+from sglang.test.ci.ci_register import register_cpu_ci
 
-register_cuda_ci(est_time=60, suite="stage-a-test-1")
+register_cpu_ci(est_time=60, suite="stage-a-cpu-only")
 
 import os
 import shutil
