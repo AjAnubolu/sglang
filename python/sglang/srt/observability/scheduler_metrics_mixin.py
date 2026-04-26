@@ -330,12 +330,14 @@ class SchedulerMetricsMixin:
         if not self.waiting_queue:
             return 0.0
         now = time.perf_counter()
-        waits = [
-            now - req.time_stats.wait_queue_entry_time
-            for req in self.waiting_queue
-            if req.time_stats.wait_queue_entry_time > 0.0
-        ]
-        return sum(waits) / len(waits) if waits else 0.0
+        total = 0.0
+        count = 0
+        for req in self.waiting_queue:
+            entry_time = req.time_stats.wait_queue_entry_time
+            if entry_time > 0.0:
+                total += now - entry_time
+                count += 1
+        return total / count if count else 0.0
 
     def report_prefill_stats(
         self: Scheduler,
